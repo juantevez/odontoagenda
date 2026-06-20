@@ -1,0 +1,160 @@
+version: "3.9"
+
+# ── OdontoAgenda — Docker Compose (desarrollo local) ─────────────
+# Arquitectura: un binario por Bounded Context
+#
+# Puertos HTTP:
+#   8081 → IAM (Identity & Access)
+#   8082 → Patient Management
+#   8083 → Professional Management
+#   8084 → Scheduling          (próximo)
+#   8085 → Coverage & Agreements
+#   8086 → Notifications
+#   8087 → Billing & Payments
+#
+# Infraestructura compartida: PostgreSQL 16+PostGIS, NATS JetStream, Redis
+
+services:
+
+  # ── PostgreSQL 16 + PostGIS ──────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: odontoagenda-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     odontoagenda
+      POSTGRES_PASSWORD: odontoagenda
+      POSTGRES_DB:       odontoagenda
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odontoagenda"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── NATS JetStream ───────────────────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    container_name: odontoagenda-nats
+    restart: unless-stopped
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "--http_port=8222"
+      - "--name=odontoagenda-nats"
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # monitoring
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: odontoagenda-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Servicio: IAM (Identity & Access) ────────────────────────────
+  iam:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: iam
+    container_name: odontoagenda-iam
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats:     { condition: service_healthy }
+    environment:
+      SERVICE_NAME:          "odontoagenda-iam"
+      PORT:                  "8081"
+      DATABASE_URL:          "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:              "nats://nats:4222"
+      JWT_SECRET:            "${JWT_SECRET}"
+      JWT_ISSUER:            "odontoagenda.iam"
+      ACCESS_TOKEN_TTL_MIN:  "15"
+      REFRESH_TOKEN_TTL_DAYS: "30"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Servicio: Patient Management ─────────────────────────────────
+  patient:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: patient
+    container_name: odontoagenda-patient
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats:     { condition: service_healthy }
+      iam:      { condition: service_healthy }
+    environment:
+      SERVICE_NAME: "odontoagenda-patient"
+      PORT:         "8082"
+      DATABASE_URL: "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:     "nats://nats:4222"
+      JWT_SECRET:   "${JWT_SECRET}"
+      JWT_ISSUER:   "odontoagenda.iam"
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Servicio: Professional Management ────────────────────────────
+  professional:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: professional
+    container_name: odontoagenda-professional
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats:     { condition: service_healthy }
+      iam:      { condition: service_healthy }
+    environment:
+      SERVICE_NAME: "odontoagenda-professional"
+      PORT:         "8083"
+      DATABASE_URL: "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:     "nats://nats:4222"
+      JWT_SECRET:   "${JWT_SECRET}"
+      JWT_ISSUER:   "odontoagenda.iam"
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  nats_data:
+  redis_data:
