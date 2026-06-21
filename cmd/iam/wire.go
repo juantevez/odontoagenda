@@ -47,7 +47,7 @@ func initApp(cfg config) (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wire: pgxpool: %w", err)
 	}
-	if err := pool.Ping(context.Background()); err != nil {
+	if err := waitForPostgres(pool, 30*time.Second); err != nil {
 		return nil, fmt.Errorf("wire: postgres ping: %w", err)
 	}
 
@@ -128,5 +128,21 @@ func (a *app) close() {
 	}
 	if a.pgPool != nil {
 		a.pgPool.Close()
+	}
+}
+
+func waitForPostgres(pool *pgxpool.Pool, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		if err := pool.Ping(ctx); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+			// reintentar
+		}
 	}
 }

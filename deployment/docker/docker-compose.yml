@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ── OdontoAgenda — Docker Compose (desarrollo local) ─────────────
 # Arquitectura: un binario por Bounded Context
 #
@@ -7,12 +5,16 @@ version: "3.9"
 #   8081 → IAM (Identity & Access)
 #   8082 → Patient Management
 #   8083 → Professional Management
-#   8084 → Scheduling          (próximo)
+#   8084 → Scheduling
 #   8085 → Coverage & Agreements
 #   8086 → Notifications
 #   8087 → Billing & Payments
 #
 # Infraestructura compartida: PostgreSQL 16+PostGIS, NATS JetStream, Redis
+#
+# Nota: los servicios de aplicación usan imágenes distroless (sin shell ni
+# herramientas de red), por lo que no tienen healthcheck HTTP propio.
+# La disponibilidad real se verifica con: curl http://localhost:808x/health
 
 services:
 
@@ -84,21 +86,20 @@ services:
       postgres: { condition: service_healthy }
       nats:     { condition: service_healthy }
     environment:
-      SERVICE_NAME:          "odontoagenda-iam"
-      PORT:                  "8081"
-      DATABASE_URL:          "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
-      NATS_URL:              "nats://nats:4222"
-      JWT_SECRET:            "${JWT_SECRET}"
-      JWT_ISSUER:            "odontoagenda.iam"
-      ACCESS_TOKEN_TTL_MIN:  "15"
+      SERVICE_NAME:           "odontoagenda-iam"
+      PORT:                   "8081"
+      DATABASE_URL:           "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:               "nats://nats:4222"
+      JWT_SECRET:             "${JWT_SECRET}"
+      JWT_ISSUER:             "odontoagenda.iam"
+      ACCESS_TOKEN_TTL_MIN:   "15"
       REFRESH_TOKEN_TTL_DAYS: "30"
     ports:
       - "8081:8081"
+    # distroless no tiene shell ni wget: healthcheck desactivado.
+    # Verificar manualmente: curl http://localhost:8081/health
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      disable: true
 
   # ── Servicio: Patient Management ─────────────────────────────────
   patient:
@@ -111,7 +112,6 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       nats:     { condition: service_healthy }
-      iam:      { condition: service_healthy }
     environment:
       SERVICE_NAME: "odontoagenda-patient"
       PORT:         "8082"
@@ -122,10 +122,7 @@ services:
     ports:
       - "8082:8082"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8082/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      disable: true
 
   # ── Servicio: Professional Management ────────────────────────────
   professional:
@@ -138,7 +135,6 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       nats:     { condition: service_healthy }
-      iam:      { condition: service_healthy }
     environment:
       SERVICE_NAME: "odontoagenda-professional"
       PORT:         "8083"
@@ -149,10 +145,32 @@ services:
     ports:
       - "8083:8083"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8083/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      disable: true
+
+  # ── Servicio: Scheduling ──────────────────────────────────────────
+  scheduling:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: scheduling
+    container_name: odontoagenda-scheduling
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats:     { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    environment:
+      SERVICE_NAME: "odontoagenda-scheduling"
+      PORT:         "8084"
+      DATABASE_URL: "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:     "nats://nats:4222"
+      REDIS_URL:    "redis://redis:6379"
+      JWT_SECRET:   "${JWT_SECRET}"
+      JWT_ISSUER:   "odontoagenda.iam"
+    ports:
+      - "8084:8084"
+    healthcheck:
+      disable: true
 
 volumes:
   postgres_data:
