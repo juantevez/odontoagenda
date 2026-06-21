@@ -307,7 +307,7 @@ func (h *RefreshTokensHandler) Handle(ctx context.Context, cmd RefreshTokensComm
 	}, nil
 }
 
-func resolveContextForRefresh(user *aggregate.User) ([]sharedtypes.ClinicID, *sharedtypes.FamilyID, bool) {
+func resolveContextForRefresh(_ *aggregate.User) ([]sharedtypes.ClinicID, *sharedtypes.FamilyID, bool) {
 	// Simplificado; en producción cargaría desde BD.
 	return nil, nil, false
 }
