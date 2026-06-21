@@ -1,23 +1,6 @@
 # ── OdontoAgenda — Docker Compose (desarrollo local) ─────────────
-# Arquitectura: un binario por Bounded Context
-#
-# Orden de arranque garantizado:
-#   1. postgres  (healthcheck pg_isready)
-#   2. nats      (healthcheck wget /healthz)
-#   3. redis     (healthcheck redis-cli ping)
-#   4. nats-init (crea todos los JetStream streams; termina con exit 0)
-#   5. iam, patient, professional, scheduling
-#      (dependen de nats-init con service_completed_successfully)
-#
-# Puertos HTTP:
-#   8081 → IAM (Identity & Access)
-#   8082 → Patient Management
-#   8083 → Professional Management
-#   8084 → Scheduling
-
 services:
 
-  # ── PostgreSQL 16 + PostGIS ──────────────────────────────────────
   postgres:
     image: postgis/postgis:16-3.4-alpine
     container_name: odontoagenda-postgres
@@ -36,7 +19,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # ── NATS JetStream ───────────────────────────────────────────────
   nats:
     image: nats:2.10-alpine
     container_name: odontoagenda-nats
@@ -48,7 +30,7 @@ services:
       - "--name=odontoagenda-nats"
     ports:
       - "4222:4222"
-      - "8222:8222"   # monitoring
+      - "8222:8222"
     volumes:
       - nats_data:/data
     healthcheck:
@@ -57,7 +39,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # ── Redis ────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: odontoagenda-redis
@@ -73,14 +54,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # ── NATS Init — crea todos los streams antes de que arranquen los BCs ──
-  #
-  # service_completed_successfully: Docker Compose espera a que este
-  # contenedor termine con exit code 0 antes de iniciar los BCs que
-  # lo tienen como dependencia. Si falla (exit != 0), los BCs no arrancan.
-  #
-  # restart: on-failure: reintenta si el script falla (ej: NATS tardó más
-  # de lo esperado a pesar del healthcheck). No reinicia si exit 0.
   nats-init:
     build:
       context: ./nats-init
@@ -93,7 +66,6 @@ services:
     environment:
       NATS_URL: "nats://nats:4222"
 
-  # ── Servicio: IAM (Identity & Access) ────────────────────────────
   iam:
     build:
       context: ../..
@@ -120,7 +92,6 @@ services:
     healthcheck:
       disable: true
 
-  # ── Servicio: Patient Management ─────────────────────────────────
   patient:
     build:
       context: ../..
@@ -145,7 +116,6 @@ services:
     healthcheck:
       disable: true
 
-  # ── Servicio: Professional Management ────────────────────────────
   professional:
     build:
       context: ../..
@@ -170,7 +140,6 @@ services:
     healthcheck:
       disable: true
 
-  # ── Servicio: Scheduling ──────────────────────────────────────────
   scheduling:
     build:
       context: ../..
@@ -195,6 +164,64 @@ services:
       JWT_ISSUER:   "odontoagenda.iam"
     ports:
       - "8084:8084"
+    healthcheck:
+      disable: true
+
+  notifications:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: notifications
+    container_name: odontoagenda-notifications
+    restart: unless-stopped
+    depends_on:
+      nats-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME:           "odontoagenda-notifications"
+      PORT:                   "8086"
+      NATS_URL:               "nats://nats:4222"
+      NOTIFICATIONS_LOG_ONLY: "true"
+      # Descomentar para habilitar canales reales:
+      # WHATSAPP_ENABLED:     "true"
+      # WHATSAPP_PROVIDER_URL:"https://api.twilio.com/..."
+      # WHATSAPP_TOKEN:       "${WHATSAPP_TOKEN}"
+      # EMAIL_ENABLED:        "true"
+      # EMAIL_FROM:           "turnos@odontoagenda.com"
+      # SENDGRID_API_KEY:     "${SENDGRID_API_KEY}"
+      # SMS_ENABLED:          "true"
+      # TWILIO_ACCOUNT_SID:   "${TWILIO_ACCOUNT_SID}"
+      # TWILIO_AUTH_TOKEN:    "${TWILIO_AUTH_TOKEN}"
+      # TWILIO_FROM_NUMBER:   "${TWILIO_FROM_NUMBER}"
+    ports:
+      - "8086:8086"
+    healthcheck:
+      disable: true
+
+  coverage:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: coverage
+    container_name: odontoagenda-coverage
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: "odontoagenda-coverage"
+      PORT:         "8085"
+      DATABASE_URL: "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:     "nats://nats:4222"
+      REDIS_URL:    "redis://redis:6379"
+      JWT_SECRET:   "${JWT_SECRET}"
+      JWT_ISSUER:   "odontoagenda.iam"
+    ports:
+      - "8085:8085"
     healthcheck:
       disable: true
 

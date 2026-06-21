@@ -149,6 +149,21 @@ var knownStreams = map[string]streamSpec{
 		MaxAge:   7 * 24 * time.Hour,
 		MaxBytes: -1,
 	},
+	"COVERAGE_EVENTS": {
+		Subjects: []string{
+			"agreement.created",
+			"agreement.plan_added",
+			"agreement.procedure_rule_updated",
+			"agreement.suspended",
+			"agreement.activated",
+			"agreement.expired",
+			"authorization.requested",
+			"authorization.resolved",
+			"authorization.expired",
+		},
+		MaxAge:   7 * 24 * time.Hour,
+		MaxBytes: -1,
+	},
 	"DEAD_LETTER_EVENTS": {
 		Subjects: []string{"dlq.>"},
 		MaxAge:   30 * 24 * time.Hour,
@@ -211,7 +226,7 @@ func New(cfg Config) (*NATSBus, error) {
 		tracer:         otel.Tracer("odontoagenda/events"),
 		logger:         slog.Default().With("component", "event_bus"),
 		dlqStream:      cfg.DLQStream,
-		ensuredStreams: make(map[string]struct{}),
+		ensuredStreams:  make(map[string]struct{}),
 	}
 
 	// Provisionar el DLQ stream al inicio (siempre necesario).
@@ -256,15 +271,15 @@ func (b *NATSBus) ensureStream(ctx context.Context, streamName string) error {
 	}
 
 	cfg := jetstream.StreamConfig{
-		Name:       streamName,
-		Subjects:   spec.Subjects,
-		Storage:    jetstream.FileStorage,
-		Replicas:   1,
-		Retention:  jetstream.LimitsPolicy,
-		MaxAge:     spec.MaxAge,
-		MaxBytes:   spec.MaxBytes,
-		MaxMsgSize: 1024 * 1024, // 1 MB por mensaje
-		Discard:    jetstream.DiscardOld,
+		Name:              streamName,
+		Subjects:          spec.Subjects,
+		Storage:           jetstream.FileStorage,
+		Replicas:          1,
+		Retention:         jetstream.LimitsPolicy,
+		MaxAge:            spec.MaxAge,
+		MaxBytes:          spec.MaxBytes,
+		MaxMsgSize:        1024 * 1024, // 1 MB por mensaje
+		Discard: jetstream.DiscardOld,
 		Duplicates: 2 * time.Minute,
 		NoAck:      false,
 	}
@@ -535,10 +550,9 @@ func (b *NATSBus) Close() error {
 // Mapeo: prefijo del event type → nombre del stream.
 //
 // Ejemplos:
-//
-//	"user.registered"              → "IAM_EVENTS"
-//	"appointment.completed"        → "APPOINTMENT_EVENTS"
-//	"professional.schedule.updated"→ "PROFESSIONAL_EVENTS"
+//   "user.registered"              → "IAM_EVENTS"
+//   "appointment.completed"        → "APPOINTMENT_EVENTS"
+//   "professional.schedule.updated"→ "PROFESSIONAL_EVENTS"
 func subjectToStream(eventType string) string {
 	for streamName, spec := range knownStreams {
 		for _, subject := range spec.Subjects {
