@@ -169,7 +169,8 @@ func (u *User) IssueRefreshToken(deviceID, tokenHash string, ttl time.Duration) 
 		ExpiresAt: now.Add(ttl),
 	}
 	u.refreshTokens = append(u.refreshTokens, rt)
-	u.audit.Touch(&u.id)
+	selfID := uuid.UUID(u.id)
+	u.audit.Touch(&selfID)
 
 	return rt, nil
 }
@@ -194,7 +195,8 @@ func (u *User) RevokeRefreshToken(tokenHash string) error {
 	for i := range u.refreshTokens {
 		if u.refreshTokens[i].TokenHash == tokenHash {
 			u.refreshTokens[i].RevokedAt = &now
-			u.audit.Touch(&u.id)
+			selfID := uuid.UUID(u.id)
+			u.audit.Touch(&selfID)
 			return nil
 		}
 	}
@@ -204,12 +206,13 @@ func (u *User) RevokeRefreshToken(tokenHash string) error {
 // RevokeAllTokens revoca todos los refresh tokens activos (logout global).
 func (u *User) RevokeAllTokens() {
 	now := time.Now().UTC()
+	selfID := uuid.UUID(u.id)
 	for i := range u.refreshTokens {
 		if u.refreshTokens[i].RevokedAt == nil {
 			u.refreshTokens[i].RevokedAt = &now
 		}
 	}
-	u.audit.Touch(&u.id)
+	u.audit.Touch(&selfID)
 
 	u.pendingEvents = append(u.pendingEvents, event.UserLoggedOut{
 		UserID:     u.id,
@@ -221,8 +224,7 @@ func (u *User) RevokeAllTokens() {
 // Revoca todos los refresh tokens activos (sesiones previas invalidadas).
 func (u *User) ChangePassword(newHashedPassword valueobject.HashedPassword) {
 	u.password = newHashedPassword
-	u.RevokeAllTokens()
-	u.audit.Touch(&u.id)
+	u.RevokeAllTokens() // ya llama audit.Touch internamente
 }
 
 // Suspend desactiva la cuenta. Un usuario suspendido no puede autenticarse.
@@ -263,6 +265,10 @@ func (u *User) Activate(byUser uuid.UUID) error {
 }
 
 // ── Getters (solo lectura desde fuera del aggregate) ──────────────
+
+// BumpVersion incrementa la versión en memoria tras una persistencia exitosa.
+// Solo debe llamarse desde la capa de repositorio después de un Update exitoso.
+func (u *User) BumpVersion() { u.version++ }
 
 func (u *User) ID() sharedtypes.UserID               { return u.id }
 func (u *User) Email() sharedvo.Email                { return u.email }

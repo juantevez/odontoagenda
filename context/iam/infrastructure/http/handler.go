@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/juantevez/odontoagenda/context/iam/application/command"
 	"github.com/juantevez/odontoagenda/pkg/middleware"
 	sharederrors "github.com/juantevez/odontoagenda/pkg/shared/errors"
@@ -123,7 +124,11 @@ func (h *iamHTTPHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.DeviceID == "" {
-		req.DeviceID = r.Header.Get("User-Agent")
+		if ua := r.Header.Get("User-Agent"); ua != "" {
+			req.DeviceID = ua
+		} else {
+			req.DeviceID = uuid.New().String()
+		}
 	}
 
 	result, err := h.login.Handle(r.Context(), command.LoginCommand{

@@ -113,14 +113,14 @@ func (s *TokenService) generateAccessToken(
 		patientIDPtr = id
 	}
 
-	clinicIDStrs := make([]uuid.UUID, len(clinicIDs))
-	copy(clinicIDStrs, clinicIDs)
+	clinicUUIDs := make([]uuid.UUID, len(clinicIDs))
+	copy(clinicUUIDs, clinicIDs)
 
 	claims := middleware.UserClaims{
 		UserID:     user.ID(),
 		PatientID:  patientIDPtr,
 		Role:       middleware.Role(user.Role()),
-		ClinicIDs:  clinicIDStrs,
+		ClinicIDs:  clinicUUIDs,
 		FamilyID:   (*uuid.UUID)(familyID),
 		IsGuardian: isGuardian,
 		RegisteredClaims: jwt.RegisteredClaims{

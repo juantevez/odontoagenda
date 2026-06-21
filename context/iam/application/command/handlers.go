@@ -7,6 +7,8 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 
@@ -361,11 +363,8 @@ func (h *LogoutHandler) Handle(ctx context.Context, cmd LogoutCommand) error {
 	return nil
 }
 
-// hashTokenLocal es una copia local para evitar import circular.
-// En producción estaría en un pkg interno compartido.
+// hashTokenLocal aplica SHA-256 al token en plano, idéntico a hashToken en TokenService.
 func hashTokenLocal(plain string) string {
-	import_sha256 := fmt.Sprintf("%x", [32]byte{}) // placeholder
-	_ = import_sha256
-	// real impl usa crypto/sha256 igual que TokenService
-	return plain // simplificado
+	h := sha256.Sum256([]byte(plain))
+	return hex.EncodeToString(h[:])
 }

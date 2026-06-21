@@ -1,6 +1,7 @@
 package aggregate
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,12 +42,12 @@ const (
 
 // FamilyMember representa un miembro dentro de la FamilyAccount.
 type FamilyMember struct {
-	PatientID    sharedtypes.PatientID
-	Role         FamilyRole
-	Relationship Relationship
-	IsMinor      bool
-	GuardianIDs  []sharedtypes.PatientID // quiénes pueden actuar en nombre de este miembro
-	JoinedAt     time.Time
+	PatientID    sharedtypes.PatientID   `json:"patient_id"`
+	Role         FamilyRole              `json:"role"`
+	Relationship Relationship            `json:"relationship"`
+	IsMinor      bool                    `json:"is_minor"`
+	GuardianIDs  []sharedtypes.PatientID `json:"guardian_ids,omitempty"`
+	JoinedAt     time.Time               `json:"joined_at"`
 }
 
 type FamilyRole string
@@ -233,6 +234,37 @@ func (f *FamilyAccount) CanBookFor(requesterPatientID, targetPatientID sharedtyp
 
 	return sharederrors.NewForbidden("book_appointment",
 		"no tiene autorización para reservar en nombre de este paciente")
+}
+
+// ReconstituteFamilyAccount reconstruye una FamilyAccount desde persistencia sin disparar eventos.
+func ReconstituteFamilyAccount(
+	id sharedtypes.FamilyID,
+	familyName string,
+	primaryAdultID sharedtypes.PatientID,
+	members []FamilyMember,
+	status FamilyStatus,
+	audit sharedtypes.AuditInfo,
+	version int64,
+) *FamilyAccount {
+	return &FamilyAccount{
+		id:             id,
+		familyName:     familyName,
+		primaryAdultID: primaryAdultID,
+		members:        members,
+		status:         status,
+		audit:          audit,
+		version:        version,
+	}
+}
+
+// ParseFamilyStatus valida y convierte un string al tipo FamilyStatus.
+func ParseFamilyStatus(s string) (FamilyStatus, error) {
+	switch FamilyStatus(s) {
+	case FamilyStatusActive, FamilyStatusSuspended:
+		return FamilyStatus(s), nil
+	default:
+		return "", fmt.Errorf("family status inválido '%s'", s)
+	}
 }
 
 // ── Getters ───────────────────────────────────────────────────────

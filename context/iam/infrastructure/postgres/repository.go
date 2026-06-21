@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juantevez/odontoagenda/context/iam/domain/aggregate"
 	"github.com/juantevez/odontoagenda/context/iam/domain/valueobject"
@@ -33,23 +34,6 @@ type UserPostgresRepository struct {
 
 func NewUserPostgresRepository(pool *pgxpool.Pool) *UserPostgresRepository {
 	return &UserPostgresRepository{pool: pool}
-}
-
-// userRow es la estructura de mapeo entre el aggregate User y la tabla iam.users.
-type userRow struct {
-	ID            uuid.UUID  `db:"id"`
-	Email         string     `db:"email"`
-	PasswordHash  string     `db:"password_hash"`
-	Role          string     `db:"role"`
-	Status        string     `db:"status"`
-	LinkedID      *uuid.UUID `db:"linked_id"`
-	LinkedType    string     `db:"linked_type"`
-	RefreshTokens []byte     `db:"refresh_tokens"` // JSONB
-	CreatedAt     time.Time  `db:"created_at"`
-	UpdatedAt     time.Time  `db:"updated_at"`
-	CreatedBy     *uuid.UUID `db:"created_by"`
-	UpdatedBy     *uuid.UUID `db:"updated_by"`
-	Version       int64      `db:"version"`
 }
 
 // Save inserta un nuevo User en la tabla iam.users.
@@ -87,6 +71,7 @@ func (r *UserPostgresRepository) Save(ctx context.Context, user *aggregate.User)
 
 // Update actualiza un User existente con optimistic locking.
 // Si la versión en BD difiere de la versión del aggregate, retorna ErrConflict.
+// Tras una actualización exitosa incrementa la versión en memoria del aggregate.
 func (r *UserPostgresRepository) Update(ctx context.Context, user *aggregate.User) error {
 	tokensJSON, err := marshalRefreshTokens(user.RefreshTokens())
 	if err != nil {
@@ -110,18 +95,19 @@ func (r *UserPostgresRepository) Update(ctx context.Context, user *aggregate.Use
 		string(user.Status()), tokensJSON,
 		audit.UpdatedAt, audit.UpdatedBy,
 		newVersion,
-		user.ID(), user.Version(), // WHERE con versión actual → optimistic lock
+		user.ID(), user.Version(),
 	)
 	if err != nil {
 		return fmt.Errorf("UserRepo.Update: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		// Ninguna fila actualizada: otro proceso modificó el registro.
 		return sharederrors.NewConflict(
 			fmt.Sprintf("User '%s' fue modificado concurrentemente (versión %d)", user.ID(), user.Version()),
 			nil,
 		)
 	}
+
+	user.BumpVersion()
 	return nil
 }
 
@@ -187,12 +173,11 @@ func (r *UserPostgresRepository) scanUser(row pgx.Row) (*aggregate.User, error) 
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, sharederrors.NewNotFound("User", "")
+			return nil, sharederrors.NewNotFound("User", id.String())
 		}
 		return nil, fmt.Errorf("UserRepo.scan: %w", err)
 	}
 
-	// Reconstruir Value Objects.
 	emailVO, err := sharedvo.NewEmail(email)
 	if err != nil {
 		return nil, fmt.Errorf("UserRepo.scan: email inválido en BD: %w", err)
@@ -206,7 +191,6 @@ func (r *UserPostgresRepository) scanUser(row pgx.Row) (*aggregate.User, error) 
 		return nil, fmt.Errorf("UserRepo.scan: status inválido en BD: %w", err)
 	}
 
-	// Deserializar refresh tokens desde JSONB.
 	tokens, err := unmarshalRefreshTokens(tokensJSON)
 	if err != nil {
 		return nil, fmt.Errorf("UserRepo.scan: tokens inválidos en BD: %w", err)
@@ -247,11 +231,12 @@ func (r *FamilyPostgresRepository) Save(ctx context.Context, family *aggregate.F
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO iam.family_accounts (
 			id, family_name, primary_adult_id, members,
-			status, created_at, updated_at, version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			status, created_at, updated_at, created_by, updated_by, version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		family.ID(), family.FamilyName(), family.PrimaryAdultID(),
 		membersJSON, string(family.Status()),
-		audit.CreatedAt, audit.UpdatedAt, family.Version(),
+		audit.CreatedAt, audit.UpdatedAt, audit.CreatedBy, audit.UpdatedBy,
+		family.Version(),
 	)
 	if err != nil {
 		return fmt.Errorf("FamilyRepo.Save: %w", err)
@@ -271,10 +256,12 @@ func (r *FamilyPostgresRepository) Update(ctx context.Context, family *aggregate
 			members = $1,
 			status = $2,
 			updated_at = $3,
-			version = $4
-		WHERE id = $5 AND version = $6`,
+			updated_by = $4,
+			version = $5
+		WHERE id = $6 AND version = $7`,
 		membersJSON, string(family.Status()),
-		family.Audit().UpdatedAt, newVersion,
+		family.Audit().UpdatedAt, family.Audit().UpdatedBy,
+		newVersion,
 		family.ID(), family.Version(),
 	)
 	if err != nil {
@@ -289,26 +276,33 @@ func (r *FamilyPostgresRepository) Update(ctx context.Context, family *aggregate
 }
 
 func (r *FamilyPostgresRepository) FindByID(ctx context.Context, id sharedtypes.FamilyID) (*aggregate.FamilyAccount, error) {
-	// Implementación similar a FindByPatientID, omitida por brevedad.
-	// En producción: SELECT + scanFamily idéntico al patrón de User.
-	return nil, sharederrors.NewNotFound("FamilyAccount", id.String())
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, family_name, primary_adult_id, members, status,
+		       created_at, updated_at, created_by, updated_by, version
+		FROM iam.family_accounts
+		WHERE id = $1`, id)
+
+	return r.scanFamily(row)
 }
 
 func (r *FamilyPostgresRepository) FindByPatientID(ctx context.Context, patientID sharedtypes.PatientID) (*aggregate.FamilyAccount, error) {
-	// Busca la cuenta familiar donde el paciente aparece como miembro (en el JSONB members).
-	// En producción, se normalizaría en una tabla iam.family_members para mayor eficiencia.
+	// Los paréntesis son obligatorios: AND tiene mayor precedencia que OR.
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, family_name, primary_adult_id, members, status,
-		       created_at, updated_at, version
+		       created_at, updated_at, created_by, updated_by, version
 		FROM iam.family_accounts
-		WHERE primary_adult_id = $1
-		   OR members @> $2::jsonb
-		   AND status = 'Active'
+		WHERE (primary_adult_id = $1 OR members @> $2::jsonb)
+		  AND status = 'Active'
 		LIMIT 1`,
 		patientID,
 		fmt.Sprintf(`[{"patient_id":"%s"}]`, patientID),
 	)
 
+	return r.scanFamily(row)
+}
+
+// scanFamily mapea una pgx.Row al aggregate FamilyAccount.
+func (r *FamilyPostgresRepository) scanFamily(row pgx.Row) (*aggregate.FamilyAccount, error) {
 	var (
 		id             uuid.UUID
 		familyName     string
@@ -317,23 +311,42 @@ func (r *FamilyPostgresRepository) FindByPatientID(ctx context.Context, patientI
 		status         string
 		createdAt      time.Time
 		updatedAt      time.Time
+		createdBy      *uuid.UUID
+		updatedBy      *uuid.UUID
 		version        int64
 	)
 
-	err := row.Scan(&id, &familyName, &primaryAdultID, &membersJSON, &status,
-		&createdAt, &updatedAt, &version)
+	err := row.Scan(
+		&id, &familyName, &primaryAdultID, &membersJSON, &status,
+		&createdAt, &updatedAt, &createdBy, &updatedBy, &version,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, sharederrors.NewNotFound("FamilyAccount", patientID.String())
+			return nil, sharederrors.NewNotFound("FamilyAccount", id.String())
 		}
-		return nil, fmt.Errorf("FamilyRepo.FindByPatientID: %w", err)
+		return nil, fmt.Errorf("FamilyRepo.scan: %w", err)
 	}
 
-	// Deserializar members desde JSONB.
-	// En una implementación completa, reconstruiría el aggregate correctamente.
-	_ = membersJSON
+	statusVO, err := aggregate.ParseFamilyStatus(status)
+	if err != nil {
+		return nil, fmt.Errorf("FamilyRepo.scan: status inválido en BD: %w", err)
+	}
 
-	return aggregate.NewFamilyAccount(primaryAdultID, familyName, nil), nil
+	var members []aggregate.FamilyMember
+	if err := json.Unmarshal(membersJSON, &members); err != nil {
+		return nil, fmt.Errorf("FamilyRepo.scan: members inválidos en BD: %w", err)
+	}
+
+	audit := sharedtypes.AuditInfo{
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+		CreatedBy: createdBy,
+		UpdatedBy: updatedBy,
+	}
+
+	return aggregate.ReconstituteFamilyAccount(
+		id, familyName, primaryAdultID, members, statusVO, audit, version,
+	), nil
 }
 
 // ── Helpers de serialización ──────────────────────────────────────
@@ -377,13 +390,25 @@ func unmarshalRefreshTokens(data []byte) ([]aggregate.RefreshToken, error) {
 	}
 	tokens := make([]aggregate.RefreshToken, len(dtos))
 	for i, dto := range dtos {
-		tokenID, _ := uuid.Parse(dto.TokenID)
-		expiresAt, _ := time.Parse(time.RFC3339, dto.ExpiresAt)
-		issuedAt, _ := time.Parse(time.RFC3339, dto.IssuedAt)
+		tokenID, err := uuid.Parse(dto.TokenID)
+		if err != nil {
+			return nil, fmt.Errorf("token[%d]: token_id inválido: %w", i, err)
+		}
+		expiresAt, err := time.Parse(time.RFC3339, dto.ExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("token[%d]: expires_at inválido: %w", i, err)
+		}
+		issuedAt, err := time.Parse(time.RFC3339, dto.IssuedAt)
+		if err != nil {
+			return nil, fmt.Errorf("token[%d]: issued_at inválido: %w", i, err)
+		}
 
 		var revokedAt *time.Time
 		if dto.RevokedAt != nil {
-			t, _ := time.Parse(time.RFC3339, *dto.RevokedAt)
+			t, err := time.Parse(time.RFC3339, *dto.RevokedAt)
+			if err != nil {
+				return nil, fmt.Errorf("token[%d]: revoked_at inválido: %w", i, err)
+			}
 			revokedAt = &t
 		}
 
@@ -400,22 +425,9 @@ func unmarshalRefreshTokens(data []byte) ([]aggregate.RefreshToken, error) {
 }
 
 // isUniqueViolation detecta violaciones de UNIQUE constraint en PostgreSQL.
-// Código de error PostgreSQL 23505 = unique_violation.
+// Usa pgconn.PgError para inspeccionar el SQLSTATE 23505 directamente.
 func isUniqueViolation(err error) bool {
-	return err != nil && (fmt.Sprintf("%v", err) != "" &&
-		containsStr(err.Error(), "23505"))
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		len(s) > 0 && searchStr(s, substr))
-}
-
-func searchStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
