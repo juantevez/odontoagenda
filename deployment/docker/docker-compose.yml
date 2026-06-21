@@ -1,20 +1,19 @@
 # ── OdontoAgenda — Docker Compose (desarrollo local) ─────────────
 # Arquitectura: un binario por Bounded Context
 #
+# Orden de arranque garantizado:
+#   1. postgres  (healthcheck pg_isready)
+#   2. nats      (healthcheck wget /healthz)
+#   3. redis     (healthcheck redis-cli ping)
+#   4. nats-init (crea todos los JetStream streams; termina con exit 0)
+#   5. iam, patient, professional, scheduling
+#      (dependen de nats-init con service_completed_successfully)
+#
 # Puertos HTTP:
 #   8081 → IAM (Identity & Access)
 #   8082 → Patient Management
 #   8083 → Professional Management
 #   8084 → Scheduling
-#   8085 → Coverage & Agreements
-#   8086 → Notifications
-#   8087 → Billing & Payments
-#
-# Infraestructura compartida: PostgreSQL 16+PostGIS, NATS JetStream, Redis
-#
-# Nota: los servicios de aplicación usan imágenes distroless (sin shell ni
-# herramientas de red), por lo que no tienen healthcheck HTTP propio.
-# La disponibilidad real se verifica con: curl http://localhost:808x/health
 
 services:
 
@@ -74,6 +73,26 @@ services:
       timeout: 5s
       retries: 10
 
+  # ── NATS Init — crea todos los streams antes de que arranquen los BCs ──
+  #
+  # service_completed_successfully: Docker Compose espera a que este
+  # contenedor termine con exit code 0 antes de iniciar los BCs que
+  # lo tienen como dependencia. Si falla (exit != 0), los BCs no arrancan.
+  #
+  # restart: on-failure: reintenta si el script falla (ej: NATS tardó más
+  # de lo esperado a pesar del healthcheck). No reinicia si exit 0.
+  nats-init:
+    build:
+      context: ./nats-init
+      dockerfile: Dockerfile
+    container_name: odontoagenda-nats-init
+    restart: on-failure
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: "nats://nats:4222"
+
   # ── Servicio: IAM (Identity & Access) ────────────────────────────
   iam:
     build:
@@ -83,8 +102,10 @@ services:
     container_name: odontoagenda-iam
     restart: unless-stopped
     depends_on:
-      postgres: { condition: service_healthy }
-      nats:     { condition: service_healthy }
+      postgres:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
     environment:
       SERVICE_NAME:           "odontoagenda-iam"
       PORT:                   "8081"
@@ -96,8 +117,6 @@ services:
       REFRESH_TOKEN_TTL_DAYS: "30"
     ports:
       - "8081:8081"
-    # distroless no tiene shell ni wget: healthcheck desactivado.
-    # Verificar manualmente: curl http://localhost:8081/health
     healthcheck:
       disable: true
 
@@ -110,8 +129,10 @@ services:
     container_name: odontoagenda-patient
     restart: unless-stopped
     depends_on:
-      postgres: { condition: service_healthy }
-      nats:     { condition: service_healthy }
+      postgres:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
     environment:
       SERVICE_NAME: "odontoagenda-patient"
       PORT:         "8082"
@@ -133,8 +154,10 @@ services:
     container_name: odontoagenda-professional
     restart: unless-stopped
     depends_on:
-      postgres: { condition: service_healthy }
-      nats:     { condition: service_healthy }
+      postgres:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
     environment:
       SERVICE_NAME: "odontoagenda-professional"
       PORT:         "8083"
@@ -156,9 +179,12 @@ services:
     container_name: odontoagenda-scheduling
     restart: unless-stopped
     depends_on:
-      postgres: { condition: service_healthy }
-      nats:     { condition: service_healthy }
-      redis:    { condition: service_healthy }
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
     environment:
       SERVICE_NAME: "odontoagenda-scheduling"
       PORT:         "8084"
@@ -176,3 +202,4 @@ volumes:
   postgres_data:
   nats_data:
   redis_data:
+  
