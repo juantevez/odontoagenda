@@ -44,6 +44,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /bin/coverage \
     ./cmd/coverage
 
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -mod=vendor \
+    -ldflags="-s -w" \
+    -o /bin/billing \
+    ./cmd/billing
+
 # ── IAM ──────────────────────────────────────────────────────────
 FROM gcr.io/distroless/static-debian12 AS iam
 COPY --from=builder /bin/iam /iam
@@ -79,3 +86,9 @@ FROM gcr.io/distroless/static-debian12 AS coverage
 COPY --from=builder /bin/coverage /coverage
 EXPOSE 8085
 ENTRYPOINT ["/coverage"]
+
+# ── Billing ───────────────────────────────────────────────────────
+FROM gcr.io/distroless/static-debian12 AS billing
+COPY --from=builder /bin/billing /billing
+EXPOSE 8087
+ENTRYPOINT ["/billing"]

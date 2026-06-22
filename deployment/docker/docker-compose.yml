@@ -198,6 +198,11 @@ services:
     healthcheck:
       disable: true
 
+volumes:
+  postgres_data:
+  nats_data:
+  redis_data:
+
   coverage:
     build:
       context: ../..
@@ -225,8 +230,29 @@ services:
     healthcheck:
       disable: true
 
-volumes:
-  postgres_data:
-  nats_data:
-  redis_data:
-  
+  billing:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: billing
+    container_name: odontoagenda-billing
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
+      coverage:
+        condition: service_started
+    environment:
+      SERVICE_NAME:       "odontoagenda-billing"
+      PORT:               "8087"
+      DATABASE_URL:       "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:           "nats://nats:4222"
+      JWT_SECRET:         "${JWT_SECRET}"
+      JWT_ISSUER:         "odontoagenda.iam"
+      COVERAGE_BASE_URL:  "http://odontoagenda-coverage:8085"
+    ports:
+      - "8087:8087"
+    healthcheck:
+      disable: true

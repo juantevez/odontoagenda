@@ -149,6 +149,19 @@ var knownStreams = map[string]streamSpec{
 		MaxAge:   7 * 24 * time.Hour,
 		MaxBytes: -1,
 	},
+	"BILLING_EVENTS": {
+		Subjects: []string{
+			"billing.quote_created",
+			"billing.payment_received",
+			"billing.quote_paid",
+			"billing.late_fee_applied",
+			"billing.late_fee_waived",
+			"billing.quote_voided",
+			"billing.refund_issued",
+		},
+		MaxAge:   30 * 24 * time.Hour,
+		MaxBytes: -1,
+	},
 	"COVERAGE_EVENTS": {
 		Subjects: []string{
 			"agreement.created",
