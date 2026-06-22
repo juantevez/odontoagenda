@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/juantevez/odontoagenda/context/coverage/domain/aggregate"
+	"github.com/juantevez/odontoagenda/context/coverage/domain/event"
 	"github.com/juantevez/odontoagenda/context/coverage/domain/repository"
 	"github.com/juantevez/odontoagenda/context/coverage/domain/service"
 	"github.com/juantevez/odontoagenda/context/coverage/domain/valueobject"
@@ -30,13 +31,13 @@ type CreateAgreementCommand struct {
 	ContactPhone           string
 	CancellationNoticeDays int
 	// Primer plan (obligatorio para convenios no-Privado)
-	FirstPlanCode                string
-	FirstPlanName                string
-	FirstPlanCoPayType           string
-	FirstPlanCoPayValue          int
-	FirstPlanRequiresPreAuth     bool
-	FirstPlanMaxAnnualVisits     *int
-	CreatedBy                    *uuid.UUID
+	FirstPlanCode            string
+	FirstPlanName            string
+	FirstPlanCoPayType       string
+	FirstPlanCoPayValue      int
+	FirstPlanRequiresPreAuth bool
+	FirstPlanMaxAnnualVisits *int
+	CreatedBy                *uuid.UUID
 }
 
 type CreateAgreementHandler struct {
@@ -121,13 +122,13 @@ func (h *CreateAgreementHandler) Handle(ctx context.Context, cmd CreateAgreement
 // ── AddPlan ───────────────────────────────────────────────────────
 
 type AddPlanCommand struct {
-	AgreementID          uuid.UUID
-	PlanCode             string
-	PlanName             string
-	CoPayType            string
-	CoPayValue           int
-	RequiresPreAuth      bool
-	MaxAnnualVisits      *int
+	AgreementID     uuid.UUID
+	PlanCode        string
+	PlanName        string
+	CoPayType       string
+	CoPayValue      int
+	RequiresPreAuth bool
+	MaxAnnualVisits *int
 }
 
 type AddPlanHandler struct {
@@ -380,13 +381,11 @@ func (h *ResolveAuthorizationHandler) Handle(ctx context.Context, cmd ResolveAut
 
 // ── helper ────────────────────────────────────────────────────────
 
-func publishEvents(ctx context.Context, bus events.Bus, evts []interface{ EventType() string }, logger *slog.Logger) {
+func publishEvents(ctx context.Context, bus events.Bus, evts []event.DomainEvent, logger *slog.Logger) {
 	for _, evt := range evts {
-		if de, ok := evt.(events.DomainEvent); ok {
-			if err := bus.Publish(ctx, de); err != nil {
-				logger.WarnContext(ctx, "error publicando evento",
-					"event_type", evt.EventType(), "error", err)
-			}
+		if err := bus.Publish(ctx, evt); err != nil {
+			logger.WarnContext(ctx, "error publicando evento",
+				"event_type", evt.EventType(), "error", err)
 		}
 	}
 }

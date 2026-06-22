@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -53,33 +54,33 @@ func initApp(cfg config) (*app, error) {
 
 	// ── 2. Repositorios ───────────────────────────────────────────
 
-	agreementRepo    := coveragepg.NewAgreementPostgresRepository(pool)
-	authRepo         := coveragepg.NewAuthorizationPostgresRepository(pool)
-	affiliationRepo  := coveragepg.NewPatientAffiliationPostgresRepository(pool)
+	agreementRepo := coveragepg.NewAgreementPostgresRepository(pool)
+	authRepo := coveragepg.NewAuthorizationPostgresRepository(pool)
+	affiliationRepo := coveragepg.NewPatientAffiliationPostgresRepository(pool)
 
 	// ── 3. Domain Services ────────────────────────────────────────
 
-	calculator       := coveragesvc.NewCoverageCalculator(affiliationRepo)
-	verifier         := coveragesvc.NewAffiliationVerifier(agreementRepo, affiliationRepo)
-	authSvc          := coveragesvc.NewAuthorizationService(authRepo)
+	calculator := coveragesvc.NewCoverageCalculator(affiliationRepo)
+	verifier := coveragesvc.NewAffiliationVerifier(agreementRepo, affiliationRepo)
+	authSvc := coveragesvc.NewAuthorizationService(authRepo)
 
 	// ── 4. Command Handlers ───────────────────────────────────────
 
-	createAgreementH      := coveragecmd.NewCreateAgreementHandler(agreementRepo, bus)
-	addPlanH              := coveragecmd.NewAddPlanHandler(agreementRepo, bus)
-	upsertRuleH           := coveragecmd.NewUpsertProcedureRuleHandler(agreementRepo, cache, bus)
-	updateStatusH         := coveragecmd.NewUpdateAgreementStatusHandler(agreementRepo, bus)
+	createAgreementH := coveragecmd.NewCreateAgreementHandler(agreementRepo, bus)
+	addPlanH := coveragecmd.NewAddPlanHandler(agreementRepo, bus)
+	upsertRuleH := coveragecmd.NewUpsertProcedureRuleHandler(agreementRepo, cache, bus)
+	updateStatusH := coveragecmd.NewUpdateAgreementStatusHandler(agreementRepo, bus)
 	requestAuthorizationH := coveragecmd.NewRequestAuthorizationHandler(authSvc, bus)
 	resolveAuthorizationH := coveragecmd.NewResolveAuthorizationHandler(authSvc, bus)
 
 	// ── 5. Query Handlers ─────────────────────────────────────────
 
-	getAgreementH      := coverageqry.NewGetAgreementHandler(agreementRepo)
-	listAgreementsH    := coverageqry.NewListAgreementsHandler(agreementRepo)
+	getAgreementH := coverageqry.NewGetAgreementHandler(agreementRepo)
+	listAgreementsH := coverageqry.NewListAgreementsHandler(agreementRepo)
 	calculateCoverageH := coverageqry.NewCalculateCoverageHandler(agreementRepo, calculator, cache)
 	verifyAffiliationH := coverageqry.NewVerifyAffiliationHandler(verifier)
-	getAuthorizationH  := coverageqry.NewGetAuthorizationHandler(authRepo)
-	listPendingH       := coverageqry.NewListPendingAuthorizationsHandler(authRepo)
+	getAuthorizationH := coverageqry.NewGetAuthorizationHandler(authRepo)
+	listPendingH := coverageqry.NewListPendingAuthorizationsHandler(authRepo)
 
 	// ── 6. NATS Subscribers ───────────────────────────────────────
 
