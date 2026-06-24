@@ -10,13 +10,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	billingcmd "github.com/juantevez/odontoagenda/context/billing/application/command"
-	billingqry "github.com/juantevez/odontoagenda/context/billing/application/query"
-	billingservice "github.com/juantevez/odontoagenda/context/billing/domain/service"
+	billingcmd  "github.com/juantevez/odontoagenda/context/billing/application/command"
+	billingqry  "github.com/juantevez/odontoagenda/context/billing/application/query"
+	billingsvc  "github.com/juantevez/odontoagenda/context/billing/domain/service"
 	billinghttp "github.com/juantevez/odontoagenda/context/billing/infrastructure/http"
 	billingnats "github.com/juantevez/odontoagenda/context/billing/infrastructure/nats"
-	billingpg "github.com/juantevez/odontoagenda/context/billing/infrastructure/postgres"
-	coverageclient "github.com/juantevez/odontoagenda/context/billing/infrastructure/coverage"
+	billingpg   "github.com/juantevez/odontoagenda/context/billing/infrastructure/postgres"
+	coverclient "github.com/juantevez/odontoagenda/context/billing/infrastructure/coverage"
+	"github.com/juantevez/odontoagenda/context/billing/infrastructure/payment"
 	"github.com/juantevez/odontoagenda/pkg/events"
 	"github.com/juantevez/odontoagenda/pkg/middleware"
 )
@@ -47,17 +48,18 @@ func initApp(cfg config) (*app, error) {
 
 	// ── 2. Repositorios ───────────────────────────────────────────
 
-	quoteRepo          := billingpg.NewQuotePostgresRepository(pool)
-	cancellationRepo   := billingpg.NewClinicCancellationPolicyPostgresRepository(pool)
+	quoteRepo        := billingpg.NewQuotePostgresRepository(pool)
+	cancellationRepo := billingpg.NewClinicCancellationPolicyPostgresRepository(pool)
 
 	// ── 3. Domain Services ────────────────────────────────────────
 
-	calculator    := billingservice.NewBillingCalculator()
-	policyService := billingservice.NewCancellationPolicyService(cancellationRepo)
+	calculator    := billingsvc.NewBillingCalculator()
+	policyService := billingsvc.NewCancellationPolicyService(cancellationRepo)
 
-	// ── 4. CoverageClient (adaptador HTTP hacia Coverage BC) ──────
+	// ── 4. Adaptadores externos ───────────────────────────────────
 
-	coverageClient := coverageclient.NewCoverageClient(cfg.CoverageBaseURL)
+	coverageClient := coverclient.NewCoverageClient(cfg.CoverageBaseURL)
+	mpAdapter      := payment.NewMercadoPagoAdapter(cfg.MPAccessToken)
 
 	// ── 5. Command Handlers ───────────────────────────────────────
 
@@ -68,6 +70,9 @@ func initApp(cfg config) (*app, error) {
 	registerPaymentH := billingcmd.NewRegisterPaymentHandler(quoteRepo, bus)
 	waiveLateFeeH    := billingcmd.NewWaiveLateFeeHandler(quoteRepo, bus)
 	setAuthCodeH     := billingcmd.NewSetAuthorizationCodeHandler(quoteRepo)
+	initMPPaymentH   := billingcmd.NewInitMPPaymentHandler(quoteRepo, mpAdapter, bus)
+	confirmPaymentH  := billingcmd.NewConfirmPaymentHandler(quoteRepo, bus)
+	refundH          := billingcmd.NewRefundHandler(quoteRepo, mpAdapter, bus)
 
 	// ── 6. Query Handlers ─────────────────────────────────────────
 
@@ -76,6 +81,7 @@ func initApp(cfg config) (*app, error) {
 	getPatientAcctH   := billingqry.NewGetPatientAccountHandler(quoteRepo)
 	getPatientQuotesH := billingqry.NewGetPatientQuotesHandler(quoteRepo)
 	getDailyReportH   := billingqry.NewGetDailyReportHandler(quoteRepo)
+	getClinicReportH  := billingqry.NewGetClinicReportHandler(quoteRepo)
 
 	// ── 7. NATS Subscribers ───────────────────────────────────────
 
@@ -94,6 +100,8 @@ func initApp(cfg config) (*app, error) {
 	// ── 8. HTTP Handlers de infraestructura ───────────────────────
 
 	cancellationPolicyH := billinghttp.NewCancellationPolicyHTTPHandler(cancellationRepo)
+	webhookH            := billinghttp.NewWebhookHandler(cfg.MPWebhookSecret, mpAdapter, registerPaymentH, confirmPaymentH)
+	reportH             := billinghttp.NewReportHandler(getDailyReportH, getClinicReportH)
 
 	// ── 9. HTTP Router ────────────────────────────────────────────
 
@@ -113,12 +121,16 @@ func initApp(cfg config) (*app, error) {
 			registerPaymentH,
 			voidQuoteH,
 			waiveLateFeeH,
+			initMPPaymentH,
+			refundH,
 			getQuoteByIDH,
 			getQuoteByApptH,
 			getPatientAcctH,
 			getPatientQuotesH,
 			getDailyReportH,
 			cancellationPolicyH,
+			webhookH,
+			reportH,
 		)
 	})
 

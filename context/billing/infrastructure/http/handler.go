@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -25,53 +24,73 @@ func RegisterRoutes(
 	registerPayment  *billingcmd.RegisterPaymentHandler,
 	voidQuote        *billingcmd.VoidQuoteHandler,
 	waiveLateFee     *billingcmd.WaiveLateFeeHandler,
+	initMPPayment    *billingcmd.InitMPPaymentHandler,
+	refund           *billingcmd.RefundHandler,
 	// Queries
 	getQuoteByID     *billingqry.GetQuoteByIDHandler,
 	getQuoteByAppt   *billingqry.GetQuoteByAppointmentHandler,
 	getPatientAcct   *billingqry.GetPatientAccountHandler,
 	getPatientQuotes *billingqry.GetPatientQuotesHandler,
 	getDailyReport   *billingqry.GetDailyReportHandler,
-	// Política de cancelación
+	// Handlers de infraestructura
 	cancellationPolicyH *CancellationPolicyHTTPHandler,
+	webhookH            *WebhookHandler,
+	reportH             *ReportHandler,
 ) {
 	h := &billingHTTPHandler{
-		registerPayment:  registerPayment,
-		voidQuote:        voidQuote,
-		waiveLateFee:     waiveLateFee,
-		getQuoteByID:     getQuoteByID,
-		getQuoteByAppt:   getQuoteByAppt,
-		getPatientAcct:   getPatientAcct,
-		getPatientQuotes: getPatientQuotes,
-		getDailyReport:   getDailyReport,
-		logger:           slog.Default().With("adapter", "billing.http"),
+		registerPayment:     registerPayment,
+		voidQuote:           voidQuote,
+		waiveLateFee:        waiveLateFee,
+		initMPPayment:       initMPPayment,
+		refund:              refund,
+		getQuoteByID:        getQuoteByID,
+		getQuoteByAppt:      getQuoteByAppt,
+		getPatientAcct:      getPatientAcct,
+		getPatientQuotes:    getPatientQuotes,
+		getDailyReport:      getDailyReport,
+		logger:              slog.Default().With("adapter", "billing.http"),
 	}
+
+	// ── Webhook MP: sin JWT, con HMAC ─────────────────────────────
+	r.Post("/billing/webhooks/mercadopago", webhookH.HandleMercadoPago)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.JWT(jwtCfg))
 
-		// ── Consultas de presupuesto ──────────────────────────────
+		// Consultas de presupuesto
 		r.Get("/billing/quotes/{quoteId}", h.GetQuoteByID)
 		r.Get("/billing/appointments/{appointmentId}/quote", h.GetQuoteByAppointment)
 
-		// ── Estado de cuenta y historial del paciente ─────────────
+		// Estado de cuenta y historial del paciente
 		r.Get("/billing/patients/{patientId}/account", h.GetPatientAccount)
 		r.Get("/billing/patients/{patientId}/quotes", h.GetPatientQuotes)
 
-		// ── Registro de pagos ─────────────────────────────────────
+		// Registro de pagos
 		r.Post("/billing/quotes/{quoteId}/payments", h.RegisterPayment)
 
-		// ── Administración (solo admin) ───────────────────────────
+		// Inicio de pago MercadoPago
+		r.Post("/billing/quotes/{quoteId}/payments/mercadopago", h.InitMPPayment)
+
+		// Administración (solo admin)
 		r.Post("/billing/quotes/{quoteId}/void",
 			middleware.RequireRoles(middleware.RoleClinicAdmin, middleware.RoleSuperAdmin)(
 				http.HandlerFunc(h.VoidQuote)).ServeHTTP,
+		)
+		r.Post("/billing/quotes/{quoteId}/refund",
+			middleware.RequireRoles(middleware.RoleClinicAdmin, middleware.RoleSuperAdmin)(
+				http.HandlerFunc(h.Refund)).ServeHTTP,
 		)
 		r.Put("/billing/late-fees/{feeId}/waive",
 			middleware.RequireRoles(middleware.RoleClinicAdmin, middleware.RoleSuperAdmin)(
 				http.HandlerFunc(h.WaiveLateFee)).ServeHTTP,
 		)
 
-		// ── Reportes ──────────────────────────────────────────────
-		r.Get("/billing/reports/daily", h.GetDailyReport)
+		// Reportes
+		r.Get("/billing/reports/daily", reportH.GetDailyReport)
+		r.Get("/billing/reports/clinic", reportH.GetClinicReport)
+
+		// Política de cancelación por sede
+		RegisterCancellationPolicyRoutes(r, cancellationPolicyH)
 	})
 }
 
@@ -81,6 +100,8 @@ type billingHTTPHandler struct {
 	registerPayment  *billingcmd.RegisterPaymentHandler
 	voidQuote        *billingcmd.VoidQuoteHandler
 	waiveLateFee     *billingcmd.WaiveLateFeeHandler
+	initMPPayment    *billingcmd.InitMPPaymentHandler
+	refund           *billingcmd.RefundHandler
 	getQuoteByID     *billingqry.GetQuoteByIDHandler
 	getQuoteByAppt   *billingqry.GetQuoteByAppointmentHandler
 	getPatientAcct   *billingqry.GetPatientAccountHandler
@@ -131,7 +152,6 @@ func (h *billingHTTPHandler) GetPatientAccount(w http.ResponseWriter, r *http.Re
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-
 	dto, err := h.getPatientAcct.Handle(r.Context(), billingqry.GetPatientAccountQuery{
 		PatientID: sharedtypes.PatientID(patientID),
 		Page:      sharedtypes.NewPage(limit, offset),
@@ -153,7 +173,6 @@ func (h *billingHTTPHandler) GetPatientQuotes(w http.ResponseWriter, r *http.Req
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-
 	result, err := h.getPatientQuotes.Handle(r.Context(), billingqry.GetPatientQuotesQuery{
 		PatientID: sharedtypes.PatientID(patientID),
 		Page:      sharedtypes.NewPage(limit, offset),
@@ -183,19 +202,16 @@ func (h *billingHTTPHandler) RegisterPayment(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusForbidden, "FORBIDDEN", "rol insuficiente")
 		return
 	}
-
 	quoteID, err := parseUUID(r, "quoteId")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "quoteId inválido")
 		return
 	}
-
 	var req registerPaymentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cuerpo inválido")
 		return
 	}
-
 	result, err := h.registerPayment.Handle(r.Context(), billingcmd.RegisterPaymentCommand{
 		QuoteID:       quoteID,
 		AmountCents:   req.AmountCents,
@@ -212,6 +228,63 @@ func (h *billingHTTPHandler) RegisterPayment(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// ── POST /billing/quotes/:quoteId/payments/mercadopago ────────────
+
+type initMPPaymentRequest struct {
+	AmountCents    int64  `json:"amount_cents"`
+	PatientName    string `json:"patient_name"`
+	ProcedureDesc  string `json:"procedure_description"`
+	BackURLSuccess string `json:"back_url_success"`
+	BackURLFailure string `json:"back_url_failure"`
+	BackURLPending string `json:"back_url_pending"`
+}
+
+func (h *billingHTTPHandler) InitMPPayment(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "no autenticado")
+		return
+	}
+	quoteID, err := parseUUID(r, "quoteId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "quoteId inválido")
+		return
+	}
+	var req initMPPaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cuerpo inválido")
+		return
+	}
+
+	// La URL del webhook se construye desde la config del servidor.
+	// En producción: usar el dominio público configurado.
+	webhookURL := r.URL.Scheme + "://" + r.Host + "/api/v1/billing/webhooks/mercadopago"
+	if r.URL.Scheme == "" {
+		webhookURL = "https://" + r.Host + "/api/v1/billing/webhooks/mercadopago"
+	}
+
+	result, err := h.initMPPayment.Handle(r.Context(), billingcmd.InitMPPaymentCommand{
+		QuoteID:        quoteID,
+		AmountCents:    req.AmountCents,
+		PatientName:    req.PatientName,
+		ProcedureDesc:  req.ProcedureDesc,
+		BackURLSuccess: req.BackURLSuccess,
+		BackURLFailure: req.BackURLFailure,
+		BackURLPending: req.BackURLPending,
+		WebhookURL:     webhookURL,
+	})
+	if err != nil {
+		writeErrorFromDomain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"payment_id":    result.PaymentID.String(),
+		"preference_id": result.PreferenceID,
+		"init_point":    result.InitPoint,
+		"sandbox_url":   result.SandboxURL,
+	})
+}
+
 // ── POST /billing/quotes/:quoteId/void ───────────────────────────
 
 type voidQuoteRequest struct {
@@ -224,14 +297,41 @@ func (h *billingHTTPHandler) VoidQuote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "quoteId inválido")
 		return
 	}
-
 	var req voidQuoteRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
-
-	// VoidQuote trabaja por appointmentID; como aquí tenemos quoteID (que es el mismo UUID):
 	if err := h.voidQuote.Handle(r.Context(), billingcmd.VoidQuoteCommand{
-		AppointmentID: quoteID, // el Quote usa el mismo UUID que el Appointment
+		AppointmentID: quoteID,
 		Reason:        req.Reason,
+	}); err != nil {
+		writeErrorFromDomain(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── POST /billing/quotes/:quoteId/refund ─────────────────────────
+
+type refundRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *billingHTTPHandler) Refund(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "no autenticado")
+		return
+	}
+	quoteID, err := parseUUID(r, "quoteId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "quoteId inválido")
+		return
+	}
+	var req refundRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := h.refund.HandleWithAggregate(r.Context(), billingcmd.RefundCommand{
+		QuoteID:    quoteID,
+		Reason:     req.Reason,
+		RefundedBy: claims.UserID,
 	}); err != nil {
 		writeErrorFromDomain(w, err)
 		return
@@ -252,25 +352,21 @@ func (h *billingHTTPHandler) WaiveLateFee(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "no autenticado")
 		return
 	}
-
 	feeID, err := parseUUID(r, "feeId")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "feeId inválido")
 		return
 	}
-
 	var req waiveLateFeeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cuerpo inválido")
 		return
 	}
-
 	quoteID, err := uuid.Parse(req.QuoteID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "quote_id inválido")
 		return
 	}
-
 	if err := h.waiveLateFee.Handle(r.Context(), billingcmd.WaiveLateFeeCommand{
 		QuoteID:  quoteID,
 		FeeID:    feeID,
@@ -281,34 +377,6 @@ func (h *billingHTTPHandler) WaiveLateFee(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ── GET /billing/reports/daily ────────────────────────────────────
-
-func (h *billingHTTPHandler) GetDailyReport(w http.ResponseWriter, r *http.Request) {
-	clinicIDStr := r.URL.Query().Get("clinic_id")
-	clinicID, err := uuid.Parse(clinicIDStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "clinic_id inválido")
-		return
-	}
-
-	date := time.Now().UTC()
-	if d := r.URL.Query().Get("date"); d != "" {
-		if t, err := time.Parse("2006-01-02", d); err == nil {
-			date = t
-		}
-	}
-
-	report, err := h.getDailyReport.Handle(r.Context(), billingqry.GetDailyReportQuery{
-		ClinicID: sharedtypes.ClinicID(clinicID),
-		Date:     date,
-	})
-	if err != nil {
-		writeErrorFromDomain(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, report)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -334,3 +402,4 @@ func writeErrorFromDomain(w http.ResponseWriter, err error) {
 	}
 	writeError(w, http.StatusInternalServerError, "INTERNAL", "error interno del servidor")
 }
+

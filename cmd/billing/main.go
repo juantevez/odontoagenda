@@ -58,13 +58,19 @@ func main() {
 // ── Config ────────────────────────────────────────────────────────
 
 type config struct {
-	ServiceName    string
-	Port           string
-	DatabaseURL    string
-	NATSUrl        string
-	JWTSecret      string
-	JWTIssuer      string
-	CoverageBaseURL string // URL base del BC Coverage
+	ServiceName     string
+	Port            string
+	DatabaseURL     string
+	NATSUrl         string
+	JWTSecret       string
+	JWTIssuer       string
+	CoverageBaseURL string
+
+	// MercadoPago (Fase 5)
+	// En MVP: un único access token global.
+	// En producción: cada clínica provee el suyo via tabla billing.clinic_mp_config.
+	MPAccessToken  string
+	MPWebhookSecret string
 }
 
 func mustLoadConfig() config {
@@ -76,10 +82,18 @@ func mustLoadConfig() config {
 		JWTSecret:       getEnv("JWT_SECRET", ""),
 		JWTIssuer:       getEnv("JWT_ISSUER", "odontoagenda.iam"),
 		CoverageBaseURL: getEnv("COVERAGE_BASE_URL", "http://localhost:8085"),
+		MPAccessToken:   getEnv("MP_ACCESS_TOKEN", ""),
+		MPWebhookSecret: getEnv("MP_WEBHOOK_SECRET", ""),
 	}
 	if cfg.JWTSecret == "" {
 		fmt.Fprintln(os.Stderr, "FATAL: JWT_SECRET es requerido")
 		os.Exit(1)
+	}
+	if cfg.MPAccessToken == "" {
+		slog.Warn("MP_ACCESS_TOKEN no configurado — pagos MercadoPago deshabilitados")
+	}
+	if cfg.MPWebhookSecret == "" {
+		slog.Warn("MP_WEBHOOK_SECRET no configurado — verificación HMAC desactivada (solo desarrollo)")
 	}
 	return cfg
 }
