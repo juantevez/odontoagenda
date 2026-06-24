@@ -389,7 +389,12 @@ func (r *PatientPostgresRepository) Archive(ctx context.Context, id sharedtypes.
 
 // ── scan helpers ──────────────────────────────────────────────────
 
-func (r *PatientPostgresRepository) scanPatient(ctx context.Context, row pgx.Row) (*aggregate.Patient, error) {
+// rowScanner abstrae Scan de pgx.Row (QueryRow) y pgx.Rows (Query).
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func (r *PatientPostgresRepository) scanPatient(ctx context.Context, row rowScanner) (*aggregate.Patient, error) {
 	var (
 		id             uuid.UUID
 		userID         *uuid.UUID
@@ -492,6 +497,16 @@ func (r *PatientPostgresRepository) scanPatient(ctx context.Context, row pgx.Row
 	history, err := r.loadDentalHistory(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("scanPatient: load dental history: %w", err)
+	}
+	// Si no existe todavía (race entre Save e INSERT del summary), crear uno vacío
+	// para evitar nil pointer en los query handlers que llaman p.DentalHistory().
+	if history == nil {
+		history = aggregate.ReconstituteDentalHistory(
+			uuid.New(), id, nil,
+			valueobject.RiskLevelLow, 0,
+			[]aggregate.TreatmentSummary{},
+			time.Now().UTC(), "",
+		)
 	}
 
 	return aggregate.Reconstitute(
