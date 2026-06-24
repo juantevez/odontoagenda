@@ -167,6 +167,33 @@ services:
     healthcheck:
       disable: true
 
+  coverage:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+      target: coverage
+    container_name: odontoagenda-coverage
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: "odontoagenda-coverage"
+      PORT:         "8085"
+      DATABASE_URL: "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:     "nats://nats:4222"
+      REDIS_URL:    "redis://redis:6379"
+      JWT_SECRET:   "${JWT_SECRET}"
+      JWT_ISSUER:   "odontoagenda.iam"
+    ports:
+      - "8085:8085"
+    healthcheck:
+      disable: true
+
   notifications:
     build:
       context: ../..
@@ -198,38 +225,6 @@ services:
     healthcheck:
       disable: true
 
-volumes:
-  postgres_data:
-  nats_data:
-  redis_data:
-
-  coverage:
-    build:
-      context: ../..
-      dockerfile: deployment/docker/Dockerfile
-      target: coverage
-    container_name: odontoagenda-coverage
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      nats-init:
-        condition: service_completed_successfully
-    environment:
-      SERVICE_NAME: "odontoagenda-coverage"
-      PORT:         "8085"
-      DATABASE_URL: "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
-      NATS_URL:     "nats://nats:4222"
-      REDIS_URL:    "redis://redis:6379"
-      JWT_SECRET:   "${JWT_SECRET}"
-      JWT_ISSUER:   "odontoagenda.iam"
-    ports:
-      - "8085:8085"
-    healthcheck:
-      disable: true
-
   billing:
     build:
       context: ../..
@@ -245,14 +240,22 @@ volumes:
       coverage:
         condition: service_started
     environment:
-      SERVICE_NAME:       "odontoagenda-billing"
-      PORT:               "8087"
-      DATABASE_URL:       "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
-      NATS_URL:           "nats://nats:4222"
-      JWT_SECRET:         "${JWT_SECRET}"
-      JWT_ISSUER:         "odontoagenda.iam"
-      COVERAGE_BASE_URL:  "http://odontoagenda-coverage:8085"
+      SERVICE_NAME:        "odontoagenda-billing"
+      PORT:                "8087"
+      DATABASE_URL:        "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
+      NATS_URL:            "nats://nats:4222"
+      JWT_SECRET:          "${JWT_SECRET}"
+      JWT_ISSUER:          "odontoagenda.iam"
+      COVERAGE_BASE_URL:   "http://odontoagenda-coverage:8085"
+      MP_ACCESS_TOKEN:     "${MP_ACCESS_TOKEN}"
+      MP_WEBHOOK_SECRET:   "${MP_WEBHOOK_SECRET}"
     ports:
       - "8087:8087"
     healthcheck:
       disable: true
+
+volumes:
+  postgres_data:
+  nats_data:
+  redis_data:
+  

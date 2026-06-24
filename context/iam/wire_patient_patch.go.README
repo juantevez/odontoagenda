@@ -1,0 +1,70 @@
+// PATCH para cmd/iam/wire.go
+//
+// Este archivo NO reemplaza wire.go. Contiene el diff de los cambios
+// necesarios para integrar el PatientProvisionSubscriber.
+//
+// ── Qué agregar en wire.go ────────────────────────────────────────
+//
+// 1. Imports nuevos al inicio:
+//
+//    import (
+//        ...
+//        patientcmd "github.com/juantevez/odontoagenda/context/patient/application/command"
+//        patientsvc "github.com/juantevez/odontoagenda/context/patient/domain/service"
+//        patientpostgres "github.com/juantevez/odontoagenda/context/patient/infrastructure/postgres"
+//        iamnats "github.com/juantevez/odontoagenda/context/iam/infrastructure/nats"
+//        ...
+//    )
+//
+// 2. En el struct app, agregar el campo:
+//
+//    type app struct {
+//        httpServer              *http.Server
+//        eventBus                *events.NATSBus
+//        pgPool                  *pgxpool.Pool
+//        patientProvisionSub     *iamnats.PatientProvisionSubscriber  // NUEVO
+//    }
+//
+// 3. En initApp(), después de construir bus y pool, agregar:
+//
+//    // ── Repositorios de Patient (necesarios para provisioning) ─────
+//    patientRepo    := patientpostgres.NewPatientPostgresRepository(pool)
+//    patientHistory := patientpostgres.NewCoverageHistoryPostgresRepository(pool)
+//
+//    // ── Domain Services de Patient ────────────────────────────────
+//    duplicateDetector := patientsvc.NewDuplicateDetector(patientRepo)
+//
+//    // ── Handler de provisión ──────────────────────────────────────
+//    registerPatientH := patientcmd.NewRegisterPatientHandler(patientRepo, duplicateDetector, bus)
+//    _ = patientHistory // usado en cmd/patient; aquí solo necesitamos registerPatientH
+//
+//    // ── Subscriber patient provision ──────────────────────────────
+//    patientProvisionSub := iamnats.NewPatientProvisionSubscriber(bus, registerPatientH, userRepo)
+//    if err := patientProvisionSub.RegisterAll(context.Background()); err != nil {
+//        return nil, fmt.Errorf("wire: patient provision subscriber: %w", err)
+//    }
+//
+// 4. En el return &app{...}, agregar:
+//
+//    return &app{
+//        httpServer:          srv,
+//        eventBus:            bus,
+//        pgPool:              pool,
+//        patientProvisionSub: patientProvisionSub,  // NUEVO
+//    }, nil
+//
+// 5. En close(), no es necesario nada adicional (el bus ya hace Drain).
+//
+// ── Nota importante ───────────────────────────────────────────────
+//
+// El subscriber consume user.registered del stream IAM_EVENTS.
+// IAM es el BC que publica ese evento, y ahora también lo consume
+// internamente para provisionar el Patient.
+// Esto es válido: un BC puede consumir sus propios eventos cuando
+// la acción de provisión pertenece conceptualmente al mismo contexto.
+//
+// Alternativa más limpia (post-MVP): extraer la provisión a un saga
+// dedicada en el BC Patient que escuche user.registered.
+// Por ahora la implementación en IAM es más simple y evita crear
+// dependencias adicionales entre BCs.
+package main

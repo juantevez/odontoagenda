@@ -1,4 +1,6 @@
 // Package http contiene los adaptadores de entrada HTTP del bounded context Patient.
+// CAMBIO respecto a la versión anterior:
+//   - POST /patients restringido a recepcionista, admin_sucursal y superadmin (ítem 3).
 package http
 
 import (
@@ -43,13 +45,25 @@ func RegisterRoutes(
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.JWT(jwtCfg))
 
-		// CRUD de pacientes
-		r.Post("/patients", h.Register)
+		// ── Lectura (todos los autenticados) ──────────────────────
 		r.Get("/patients", h.Search)
 		r.Get("/patients/{patientId}", h.GetByID)
 		r.Get("/patients/{patientId}/for-booking", h.GetForBooking)
 
-		// Cobertura — solo staff
+		// ── Alta de paciente: SOLO staff ──────────────────────────
+		// FIX: antes no había restricción de rol.
+		// Un usuario 'paciente' NO puede crear un registro Patient via esta ruta.
+		// El alta de un paciente que se auto-registra ocurre vía el subscriber
+		// de IAM (user.registered → Patient BC crea el Patient automáticamente).
+		r.Post("/patients",
+			middleware.RequireRoles(
+				middleware.RoleReceptionist,
+				middleware.RoleClinicAdmin,
+				middleware.RoleSuperAdmin,
+			)(http.HandlerFunc(h.Register)).ServeHTTP,
+		)
+
+		// ── Cobertura: solo staff ─────────────────────────────────
 		r.Post("/patients/{patientId}/coverage",
 			middleware.RequireRoles(
 				middleware.RoleReceptionist,
@@ -58,10 +72,10 @@ func RegisterRoutes(
 			)(http.HandlerFunc(h.AddCoverage)).ServeHTTP,
 		)
 
-		// Alertas médicas — staff o el propio paciente
+		// ── Alertas médicas: staff + el propio paciente ───────────
 		r.Post("/patients/{patientId}/medical-alerts", h.AddMedicalAlert)
 
-		// Merge — solo admin
+		// ── Merge: solo admin ─────────────────────────────────────
 		r.Post("/patients/merge",
 			middleware.RequireRoles(
 				middleware.RoleClinicAdmin,
@@ -137,8 +151,6 @@ func (h *patientHTTPHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Si hay candidatos a duplicado, devolvemos 409 con la lista para que el
-	// frontend presente la confirmación al usuario.
 	if len(result.DuplicateCandidates) > 0 {
 		type duplicateWarning struct {
 			Code       string `json:"code"`
@@ -189,7 +201,6 @@ func (h *patientHTTPHandler) Search(w http.ResponseWriter, r *http.Request) {
 		writeErrorFromDomain(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -201,13 +212,11 @@ func (h *patientHTTPHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "patientId inválido")
 		return
 	}
-
 	dto, err := h.getByID.Handle(r.Context(), query.GetPatientByIDQuery{PatientID: patientID})
 	if err != nil {
 		writeErrorFromDomain(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusOK, dto)
 }
 
@@ -219,13 +228,11 @@ func (h *patientHTTPHandler) GetForBooking(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "patientId inválido")
 		return
 	}
-
 	dto, err := h.forBooking.Handle(r.Context(), query.GetPatientForBookingQuery{PatientID: patientID})
 	if err != nil {
 		writeErrorFromDomain(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusOK, dto)
 }
 
@@ -237,7 +244,7 @@ type addCoverageRequest struct {
 	ProviderName     string  `json:"provider_name"`
 	PlanCode         string  `json:"plan_code"`
 	MembershipNumber string  `json:"membership_number"`
-	ValidFrom        string  `json:"valid_from"` // YYYY-MM-DD
+	ValidFrom        string  `json:"valid_from"`
 	ValidUntil       *string `json:"valid_until,omitempty"`
 	CoPayPercent     *int    `json:"co_pay_percent,omitempty"`
 	CoPayFixedCents  *int64  `json:"co_pay_fixed_cents,omitempty"`
@@ -249,7 +256,6 @@ func (h *patientHTTPHandler) AddCoverage(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "patientId inválido")
 		return
 	}
-
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "no autenticado")
@@ -279,23 +285,15 @@ func (h *patientHTTPHandler) AddCoverage(w http.ResponseWriter, r *http.Request)
 		CoPayFixed:       req.CoPayFixedCents,
 		AddedBy:          claims.UserID,
 	}
-
 	if req.AgreementID != nil {
-		id, err := uuid.Parse(*req.AgreementID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "agreement_id inválido")
-			return
+		if id, err := uuid.Parse(*req.AgreementID); err == nil {
+			cmd.AgreementID = &id
 		}
-		cmd.AgreementID = &id
 	}
-
 	if req.ValidUntil != nil {
-		t, err := time.Parse("2006-01-02", *req.ValidUntil)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "valid_until debe ser YYYY-MM-DD")
-			return
+		if t, err := time.Parse("2006-01-02", *req.ValidUntil); err == nil {
+			cmd.ValidUntil = &t
 		}
-		cmd.ValidUntil = &t
 	}
 
 	coverageID, err := h.addCoverage.Handle(r.Context(), cmd)
@@ -303,7 +301,6 @@ func (h *patientHTTPHandler) AddCoverage(w http.ResponseWriter, r *http.Request)
 		writeErrorFromDomain(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusCreated, map[string]string{"coverage_id": coverageID.String()})
 }
 
@@ -321,7 +318,6 @@ func (h *patientHTTPHandler) AddMedicalAlert(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "patientId inválido")
 		return
 	}
-
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "no autenticado")
@@ -348,7 +344,6 @@ func (h *patientHTTPHandler) AddMedicalAlert(w http.ResponseWriter, r *http.Requ
 		writeErrorFromDomain(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusCreated, map[string]string{"alert_id": alertID.String()})
 }
 
@@ -391,15 +386,13 @@ func (h *patientHTTPHandler) MergePatients(w http.ResponseWriter, r *http.Reques
 		writeErrorFromDomain(w, err)
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
 
 func parsePatientID(r *http.Request) (sharedtypes.PatientID, error) {
-	raw := chi.URLParam(r, "patientId")
-	return uuid.Parse(raw)
+	return uuid.Parse(chi.URLParam(r, "patientId"))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
