@@ -64,10 +64,12 @@ type professionalHTTPHandler struct {
 	logger        *slog.Logger
 }
 
-// GET /professionals?clinic_id=...&specialty=...
+// GET /professionals?clinic_id=...&specialty=...&q=...
 func (h *professionalHTTPHandler) FindByClinic(w http.ResponseWriter, r *http.Request) {
-	clinicIDStr := r.URL.Query().Get("clinic_id")
-	specialty := r.URL.Query().Get("specialty")
+	params := r.URL.Query()
+	clinicIDStr := params.Get("clinic_id")
+	specialty := params.Get("specialty")
+	searchQ := params.Get("q")
 
 	var clinicID sharedtypes.ClinicID
 	if clinicIDStr != "" {
@@ -79,12 +81,12 @@ func (h *professionalHTTPHandler) FindByClinic(w http.ResponseWriter, r *http.Re
 		clinicID = id
 	}
 
-	q := profqry.FindByClinicQuery{ClinicID: clinicID}
-	if specialty != "" {
-		q.Specialty = &specialty
+	query := profqry.FindByClinicQuery{ClinicID: clinicID, Q: searchQ}
+	if specialty != "" && searchQ == "" {
+		query.Specialty = &specialty
 	}
 
-	result, err := h.findByClinic.Handle(r.Context(), q)
+	result, err := h.findByClinic.Handle(r.Context(), query)
 	if err != nil {
 		writeErrorFromDomain(w, err)
 		return

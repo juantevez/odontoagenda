@@ -46,6 +46,10 @@ type ProfessionalRepository interface {
 	// en los próximos `withinDays` días. Usado por el job de alertas de vencimiento.
 	FindWithExpiringLicenses(ctx context.Context, withinDays int) ([]*aggregate.Professional, error)
 
+	// Search busca profesionales por nombre o código de especialidad (búsqueda parcial).
+	// Si clinicID es UUID cero, busca en todas las sedes.
+	Search(ctx context.Context, clinicID sharedtypes.ClinicID, q string) ([]*aggregate.Professional, error)
+
 	// ExistsByNationalID verifica unicidad de DNI sin cargar el aggregate.
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
 }

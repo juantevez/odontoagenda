@@ -69,6 +69,49 @@ func (r *ProfessionalPostgresRepository) ExistsByNationalID(_ context.Context, _
 	return false, nil
 }
 
+func (r *ProfessionalPostgresRepository) Search(ctx context.Context, clinicID sharedtypes.ClinicID, q string) ([]*aggregate.Professional, error) {
+	query := `
+		SELECT DISTINCT p.id, p.user_id, p.full_name, p.email, p.phone, p.status,
+		       p.created_at, p.updated_at
+		FROM professional.professionals p
+		LEFT JOIN professional.clinic_assignments ca ON ca.professional_id=p.id AND ca.status='Active'
+		LEFT JOIN professional.licenses l ON l.professional_id=p.id AND l.status='Active'
+		WHERE p.status='Active'
+		  AND ($1::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR ca.clinic_id=$1)
+		  AND (
+		        unaccent(p.full_name) ILIKE '%' || unaccent($2) || '%'
+		     OR unaccent(l.specialty_code) ILIKE '%' || unaccent($2) || '%'
+		  )
+		ORDER BY p.full_name`
+
+	rows, err := r.pool.Query(ctx, query, clinicID, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var professionals []*aggregate.Professional
+	for rows.Next() {
+		p, err := scanProfessionalRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		professionals = append(professionals, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, p := range professionals {
+		if err := r.loadLicenses(ctx, p); err != nil {
+			return nil, err
+		}
+	}
+	if professionals == nil {
+		professionals = []*aggregate.Professional{}
+	}
+	return professionals, nil
+}
+
 // ── SQL helpers ───────────────────────────────────────────────────
 
 func (r *ProfessionalPostgresRepository) findOne(ctx context.Context, where string, args ...any) (*aggregate.Professional, error) {
@@ -147,7 +190,8 @@ func (r *ProfessionalPostgresRepository) loadLicenses(ctx context.Context, p *ag
 		_ = id
 		_ = createdAt
 		_ = updatedAt
-		specialty, err := valueobject.NewSpecialty(valueobject.SpecialtyCode(specialtyCode), specialtyCode)
+		code := valueobject.SpecialtyCode(specialtyCode)
+		specialty, err := valueobject.NewSpecialty(code, code.DisplayName())
 		if err != nil {
 			continue
 		}

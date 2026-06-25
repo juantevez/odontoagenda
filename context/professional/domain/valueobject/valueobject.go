@@ -14,28 +14,60 @@ import (
 type SpecialtyCode string
 
 const (
-	SpecialtyGeneralDentistry  SpecialtyCode = "ODONTOLOGIA_GENERAL"
-	SpecialtyEndodontics       SpecialtyCode = "ENDODONCIA"
-	SpecialtyOrthodontics      SpecialtyCode = "ORTODONCIA"
-	SpecialtyPeriodontics      SpecialtyCode = "PERIODONCIA"
-	SpecialtyImplantology      SpecialtyCode = "IMPLANTOLOGIA"
+	// Especialidades Core / Clínicas
+	SpecialtyGeneralDentistry   SpecialtyCode = "ODONTOLOGIA_GENERAL"
 	SpecialtyPediatricDentistry SpecialtyCode = "ODONTOPEDIATRIA"
-	SpecialtyOralSurgery       SpecialtyCode = "CIRUGIA_ORAL"
-	SpecialtyProsthodontics    SpecialtyCode = "PROSTODONCIA"
-	SpecialtyWhitening         SpecialtyCode = "BLANQUEAMIENTO"
-	SpecialtyAesthetics        SpecialtyCode = "ESTETICA_DENTAL"
-	SpecialtyOrthoImplants     SpecialtyCode = "ORTHO_IMPLANTES"
+	SpecialtyOrthodontics       SpecialtyCode = "ORTODONCIA"
+	SpecialtyEndodontics        SpecialtyCode = "ENDODONCIA"
+
+	// Especialidades Quirúrgicas y de Alta Complejidad
+	SpecialtyPeriodontics    SpecialtyCode = "PERIODONCIA"
+	SpecialtyImplantology    SpecialtyCode = "IMPLANTOLOGIA"
+	SpecialtyOralSurgery     SpecialtyCode = "CIRUGIA_ORAL"
+	SpecialtyMaxillofacial   SpecialtyCode = "CIRUGIA_MAXILOFACIAL"
+
+	// Rehabilitación y Estética
+	SpecialtyOralRehabilitation SpecialtyCode = "REHABILITACION_ORAL"
+	SpecialtyAesthetics         SpecialtyCode = "ESTETICA_DENTAL"
+
+	// Diagnóstico y Soporte
+	SpecialtyStomatology SpecialtyCode = "ESTOMATOLOGIA"
+	SpecialtyRadiology   SpecialtyCode = "IMAGENOLOGIA_DENTAL"
 )
 
 func (s SpecialtyCode) IsValid() bool {
 	switch s {
-	case SpecialtyGeneralDentistry, SpecialtyEndodontics, SpecialtyOrthodontics,
-		SpecialtyPeriodontics, SpecialtyImplantology, SpecialtyPediatricDentistry,
-		SpecialtyOralSurgery, SpecialtyProsthodontics, SpecialtyWhitening,
-		SpecialtyAesthetics, SpecialtyOrthoImplants:
+	case SpecialtyGeneralDentistry, SpecialtyPediatricDentistry,
+		SpecialtyOrthodontics, SpecialtyEndodontics,
+		SpecialtyPeriodontics, SpecialtyImplantology,
+		SpecialtyOralSurgery, SpecialtyMaxillofacial,
+		SpecialtyOralRehabilitation, SpecialtyAesthetics,
+		SpecialtyStomatology, SpecialtyRadiology:
 		return true
 	}
 	return false
+}
+
+// DisplayName retorna el nombre en español para mostrar en la UI.
+func (s SpecialtyCode) DisplayName() string {
+	names := map[SpecialtyCode]string{
+		SpecialtyGeneralDentistry:   "Odontología General",
+		SpecialtyPediatricDentistry: "Odontopediatría",
+		SpecialtyOrthodontics:       "Ortodoncia",
+		SpecialtyEndodontics:        "Endodoncia",
+		SpecialtyPeriodontics:       "Periodoncia",
+		SpecialtyImplantology:       "Implantología",
+		SpecialtyOralSurgery:        "Cirugía Oral",
+		SpecialtyMaxillofacial:      "Cirugía Maxilofacial",
+		SpecialtyOralRehabilitation: "Rehabilitación Oral",
+		SpecialtyAesthetics:         "Estética Dental",
+		SpecialtyStomatology:        "Estomatología",
+		SpecialtyRadiology:          "Imaginología Dental",
+	}
+	if name, ok := names[s]; ok {
+		return name
+	}
+	return string(s)
 }
 
 func (s SpecialtyCode) String() string { return string(s) }

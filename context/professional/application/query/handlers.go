@@ -150,7 +150,8 @@ func (h *GetProfessionalForSchedulingHandler) Handle(
 
 type FindByClinicQuery struct {
 	ClinicID  sharedtypes.ClinicID
-	Specialty *string // opcional
+	Specialty *string // exacto (usado desde Booking)
+	Q         string  // búsqueda parcial por nombre o especialidad (usado desde lista de staff)
 }
 
 type FindByClinicHandler struct {
@@ -162,13 +163,20 @@ func NewFindByClinicHandler(repo repository.ProfessionalRepository) *FindByClini
 }
 
 func (h *FindByClinicHandler) Handle(ctx context.Context, q FindByClinicQuery) ([]*ProfessionalDetailDTO, error) {
-	var specialtyFilter *valueobject.SpecialtyCode
-	if q.Specialty != nil {
-		code := valueobject.SpecialtyCode(*q.Specialty)
-		specialtyFilter = &code
-	}
+	var profs []*aggregate.Professional
+	var err error
 
-	profs, err := h.repo.FindByClinic(ctx, q.ClinicID, specialtyFilter)
+	if q.Q != "" {
+		// Búsqueda parcial por nombre o especialidad.
+		profs, err = h.repo.Search(ctx, q.ClinicID, q.Q)
+	} else {
+		var specialtyFilter *valueobject.SpecialtyCode
+		if q.Specialty != nil {
+			code := valueobject.SpecialtyCode(*q.Specialty)
+			specialtyFilter = &code
+		}
+		profs, err = h.repo.FindByClinic(ctx, q.ClinicID, specialtyFilter)
+	}
 	if err != nil {
 		return nil, err
 	}
