@@ -403,6 +403,32 @@ func (p *Professional) AddLicense(
 	return nil
 }
 
+// ReconstituteLicense agrega una matrícula ya existente desde la BD, sin disparar eventos.
+func (p *Professional) ReconstituteLicense(
+	id uuid.UUID,
+	specialty valueobject.Specialty,
+	licenseNumber string,
+	issuingBody string,
+	issuedAt time.Time,
+	expiresAt *time.Time,
+	status valueobject.LicenseStatus,
+	documentRef string,
+) {
+	now := time.Now().UTC()
+	p.licenses = append(p.licenses, ProfessionalLicense{
+		id:            id,
+		specialty:     specialty,
+		licenseNumber: licenseNumber,
+		issuingBody:   issuingBody,
+		issuedAt:      issuedAt,
+		expiresAt:     expiresAt,
+		status:        status,
+		documentRef:   documentRef,
+		createdAt:     now,
+		updatedAt:     now,
+	})
+}
+
 // RevokeLicense revoca una matrícula por su ID (ej: sanción del ente regulador).
 func (p *Professional) RevokeLicense(licenseID uuid.UUID, reason string, by uuid.UUID) error {
 	for i := range p.licenses {

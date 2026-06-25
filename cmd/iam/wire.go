@@ -1,16 +1,18 @@
 // Package main contiene el wire-up (DI manual) del bounded context IAM.
 //
 // wire.go centraliza la construcción del árbol de dependencias completo.
-// Sigue el mismo patrón del posnet-backend: main.go queda limpio,
-// wire.go es el único lugar donde se conocen las implementaciones concretas.
-//
-// Orden de construcción (de adentro hacia afuera, siguiendo la arquitectura hexagonal):
+// Orden de construcción (de adentro hacia afuera):
 //  1. Infraestructura (pool PG, bus NATS)
-//  2. Repositorios (adaptadores de salida)
-//  3. Domain Services
-//  4. Application Services (command/query handlers)
-//  5. Adaptadores de entrada (HTTP handlers, NATS subscribers)
-//  6. Router HTTP
+//  2. Repositorios IAM (adaptadores de salida)
+//  3. Domain Services IAM
+//  4. Command Handlers IAM
+//  5. Repositorios Patient (necesarios para el subscriber de provisión)
+//  6. Domain Services Patient
+//  7. Command Handlers Patient (RegisterPatientHandler para el subscriber)
+//  8. Subscriber NATS: user.registered → crea Patient + vincula linked_id
+//  9. Adaptadores de entrada HTTP
+//
+// 10. Router HTTP + Server
 package main
 
 import (
@@ -21,24 +23,44 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	// IAM — application
 	iamcmd "github.com/juantevez/odontoagenda/context/iam/application/command"
+
+	// IAM — domain
 	iamsvc "github.com/juantevez/odontoagenda/context/iam/domain/service"
+
+	// IAM — infrastructure
 	iamhttp "github.com/juantevez/odontoagenda/context/iam/infrastructure/http"
+	iamnats "github.com/juantevez/odontoagenda/context/iam/infrastructure/nats"
 	iampostgres "github.com/juantevez/odontoagenda/context/iam/infrastructure/postgres"
+
+	// Patient — application (solo RegisterPatientHandler para el subscriber)
+	patientcmd "github.com/juantevez/odontoagenda/context/patient/application/command"
+
+	// Patient — domain
+	patientsvc "github.com/juantevez/odontoagenda/context/patient/domain/service"
+
+	// Patient — infrastructure
+	patientpostgres "github.com/juantevez/odontoagenda/context/patient/infrastructure/postgres"
+
 	"github.com/juantevez/odontoagenda/pkg/events"
 	"github.com/juantevez/odontoagenda/pkg/middleware"
 )
 
+// ── app ───────────────────────────────────────────────────────────
+
 // app agrupa todo lo que el servidor necesita en runtime.
 type app struct {
-	httpServer *http.Server
-	eventBus   *events.NATSBus
-	pgPool     *pgxpool.Pool
+	httpServer          *http.Server
+	eventBus            *events.NATSBus
+	pgPool              *pgxpool.Pool
+	patientProvisionSub *iamnats.PatientProvisionSubscriber
 }
 
+// ── initApp ───────────────────────────────────────────────────────
+
 // initApp construye el árbol completo de dependencias del BC IAM.
-// Es el único lugar en el proyecto donde aparecen los tipos concretos
-// de infraestructura (pgxpool, NATSBus, repositorios Postgres, etc.).
 func initApp(cfg config) (*app, error) {
 
 	// ── 1. Infraestructura ────────────────────────────────────────
@@ -56,12 +78,12 @@ func initApp(cfg config) (*app, error) {
 		return nil, fmt.Errorf("wire: nats: %w", err)
 	}
 
-	// ── 2. Repositorios (adaptadores de salida) ───────────────────
+	// ── 2. Repositorios IAM ───────────────────────────────────────
 
 	userRepo := iampostgres.NewUserPostgresRepository(pool)
 	familyRepo := iampostgres.NewFamilyPostgresRepository(pool)
 
-	// ── 3. Domain Services ────────────────────────────────────────
+	// ── 3. Domain Services IAM ────────────────────────────────────
 
 	tokenSvc := iamsvc.NewTokenService(iamsvc.TokenConfig{
 		SecretKey:       []byte(cfg.JWTSecret),
@@ -70,14 +92,48 @@ func initApp(cfg config) (*app, error) {
 		RefreshTokenTTL: time.Duration(cfg.RefreshTokenTTLDays) * 24 * time.Hour,
 	})
 
-	// ── 4. Command Handlers (application layer) ───────────────────
+	// ── 4. Command Handlers IAM ───────────────────────────────────
 
 	registerHandler := iamcmd.NewRegisterUserHandler(userRepo, familyRepo, bus)
 	loginHandler := iamcmd.NewLoginHandler(userRepo, familyRepo, tokenSvc)
 	refreshHandler := iamcmd.NewRefreshTokensHandler(userRepo, familyRepo, tokenSvc)
 	logoutHandler := iamcmd.NewLogoutHandler(userRepo, bus)
 
-	// ── 5. Adaptadores de entrada: HTTP ───────────────────────────
+	// ── 5. Repositorios Patient ───────────────────────────────────
+	// IAM necesita crear el Patient al registrar un usuario con rol 'paciente'.
+	// Sigue siendo responsabilidad del BC IAM orquestar esta provisión
+	// porque es parte del flujo de registro de cuenta.
+
+	patientRepo := patientpostgres.NewPatientPostgresRepository(pool)
+	patientHistory := patientpostgres.NewCoverageHistoryPostgresRepository(pool)
+	_ = patientHistory // usado en cmd/patient; aquí solo necesitamos patientRepo
+
+	// ── 6. Domain Services Patient ────────────────────────────────
+
+	duplicateDetector := patientsvc.NewDuplicateDetector(patientRepo)
+
+	// ── 7. Command Handlers Patient ───────────────────────────────
+
+	registerPatientH := patientcmd.NewRegisterPatientHandler(
+		patientRepo, duplicateDetector, bus,
+	)
+
+	// ── 8. Subscriber NATS: user.registered → provisión Patient ──
+	// Escucha el evento que el propio BC IAM publica al registrar un usuario.
+	// Cuando role = 'paciente':
+	//   a) Crea el registro Patient en patient.patients.
+	//   b) Actualiza iam.users.linked_id con el nuevo patient_id.
+	// Esto cierra el bug de diseño: un paciente que se auto-registra
+	// queda automáticamente vinculado a su ficha clínica.
+
+	patientProvisionSub := iamnats.NewPatientProvisionSubscriber(
+		bus, registerPatientH, userRepo,
+	)
+	if err := patientProvisionSub.RegisterAll(context.Background()); err != nil {
+		return nil, fmt.Errorf("wire: patient provision subscriber: %w", err)
+	}
+
+	// ── 9. Adaptadores de entrada HTTP ────────────────────────────
 
 	jwtCfg := middleware.JWTConfig{
 		SecretKey: []byte(cfg.JWTSecret),
@@ -85,16 +141,12 @@ func initApp(cfg config) (*app, error) {
 	}
 
 	r := chi.NewRouter()
-
-	// Middlewares globales
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger(newLogger()))
 	r.Use(middleware.Recoverer(newLogger()))
 
-	// Health check (sin auth, sin BC)
 	r.Get("/health", healthHandler(cfg.ServiceName))
 
-	// Rutas del BC IAM
 	r.Route("/api/v1", func(r chi.Router) {
 		iamhttp.RegisterRoutes(r, jwtCfg,
 			registerHandler,
@@ -104,7 +156,7 @@ func initApp(cfg config) (*app, error) {
 		)
 	})
 
-	// ── 6. Servidor HTTP ──────────────────────────────────────────
+	// ── 10. Servidor HTTP ─────────────────────────────────────────
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -115,13 +167,15 @@ func initApp(cfg config) (*app, error) {
 	}
 
 	return &app{
-		httpServer: srv,
-		eventBus:   bus,
-		pgPool:     pool,
+		httpServer:          srv,
+		eventBus:            bus,
+		pgPool:              pool,
+		patientProvisionSub: patientProvisionSub,
 	}, nil
 }
 
-// close libera todos los recursos en orden inverso al de inicialización.
+// ── close ─────────────────────────────────────────────────────────
+
 func (a *app) close() {
 	if a.eventBus != nil {
 		_ = a.eventBus.Close()
@@ -130,6 +184,8 @@ func (a *app) close() {
 		a.pgPool.Close()
 	}
 }
+
+// ── waitForPostgres ───────────────────────────────────────────────
 
 func waitForPostgres(pool *pgxpool.Pool, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
