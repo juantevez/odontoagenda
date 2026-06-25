@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/aggregate"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/repository"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/service"
@@ -200,12 +201,18 @@ func NewGetDayScheduleHandler(
 
 func (h *GetDayScheduleHandler) Handle(ctx context.Context, q GetDayScheduleQuery) (*DayScheduleDTO, error) {
 	dayStart := time.Date(q.Date.Year(), q.Date.Month(), q.Date.Day(), 0, 0, 0, 0, time.UTC)
-	dayEnd := dayStart.Add(24 * time.Hour)
 
-	// Citas del día.
-	appointments, err := h.apptRepo.FindByProfessionalAndDate(
-		ctx, q.ProfessionalID, q.ClinicID, dayStart, dayEnd,
-	)
+	// Citas del día: usar vista de sede cuando no se filtra por profesional.
+	var appointments []*aggregate.Appointment
+	var err error
+	if q.ProfessionalID == sharedtypes.ProfessionalID(uuid.Nil) {
+		appointments, err = h.apptRepo.FindByClinicAndDate(ctx, q.ClinicID, dayStart)
+	} else {
+		dayEnd := dayStart.Add(24 * time.Hour)
+		appointments, err = h.apptRepo.FindByProfessionalAndDate(
+			ctx, q.ProfessionalID, q.ClinicID, dayStart, dayEnd,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

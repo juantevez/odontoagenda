@@ -3,6 +3,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -256,10 +257,117 @@ func (r *AvailabilitySchedulePostgresRepository) Update(_ context.Context, _ *ag
 	return nil
 }
 
-func (r *AvailabilitySchedulePostgresRepository) FindByProfessionalAndClinic(_ context.Context, _ sharedtypes.ProfessionalID, _ sharedtypes.ClinicID) (*aggregate.AvailabilitySchedule, error) {
-	return nil, fmt.Errorf("schedule not found")
+func (r *AvailabilitySchedulePostgresRepository) FindByProfessionalAndClinic(ctx context.Context, professionalID sharedtypes.ProfessionalID, clinicID sharedtypes.ClinicID) (*aggregate.AvailabilitySchedule, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, professional_id, clinic_id, working_hours, exception_days,
+		       blocked_slots, booked_slots, procedure_durations, is_active, updated_at, version
+		FROM scheduling.availability_schedules
+		WHERE professional_id=$1 AND clinic_id=$2 AND is_active=true
+		LIMIT 1`, professionalID, clinicID)
+
+	return scanAvailabilitySchedule(row)
 }
 
-func (r *AvailabilitySchedulePostgresRepository) FindByClinic(_ context.Context, _ sharedtypes.ClinicID) ([]*aggregate.AvailabilitySchedule, error) {
-	return []*aggregate.AvailabilitySchedule{}, nil
+func (r *AvailabilitySchedulePostgresRepository) FindByClinic(ctx context.Context, clinicID sharedtypes.ClinicID) ([]*aggregate.AvailabilitySchedule, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, professional_id, clinic_id, working_hours, exception_days,
+		       blocked_slots, booked_slots, procedure_durations, is_active, updated_at, version
+		FROM scheduling.availability_schedules
+		WHERE clinic_id=$1 AND is_active=true`, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var schedules []*aggregate.AvailabilitySchedule
+	for rows.Next() {
+		s, err := scanAvailabilitySchedule(rows)
+		if err != nil {
+			return nil, err
+		}
+		schedules = append(schedules, s)
+	}
+	if schedules == nil {
+		schedules = []*aggregate.AvailabilitySchedule{}
+	}
+	return schedules, rows.Err()
+}
+
+type scheduleScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanAvailabilitySchedule(row scheduleScanner) (*aggregate.AvailabilitySchedule, error) {
+	var (
+		id, professionalID, clinicID uuid.UUID
+		workingHoursJSON             []byte
+		exceptionDaysJSON            []byte
+		blockedSlotsJSON             []byte
+		bookedSlotsJSON              []byte
+		procedureDurationsJSON       []byte
+		isActive                     bool
+		updatedAt                    time.Time
+		version                      int64
+	)
+
+	err := row.Scan(
+		&id, &professionalID, &clinicID,
+		&workingHoursJSON, &exceptionDaysJSON, &blockedSlotsJSON,
+		&bookedSlotsJSON, &procedureDurationsJSON,
+		&isActive, &updatedAt, &version,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("schedule not found")
+		}
+		return nil, err
+	}
+
+	// Parse working hours
+	var rawHours []struct {
+		Weekday   int `json:"weekday"`
+		StartHour int `json:"start_hour"`
+		StartMin  int `json:"start_min"`
+		EndHour   int `json:"end_hour"`
+		EndMin    int `json:"end_min"`
+	}
+	_ = jsonUnmarshal(workingHoursJSON, &rawHours)
+	workingHours := make([]aggregate.WorkingHour, len(rawHours))
+	for i, h := range rawHours {
+		workingHours[i] = aggregate.WorkingHour{
+			Weekday:   time.Weekday(h.Weekday),
+			StartHour: h.StartHour,
+			StartMin:  h.StartMin,
+			EndHour:   h.EndHour,
+			EndMin:    h.EndMin,
+		}
+	}
+
+	// Parse procedure durations
+	var procedureDurations map[string]int
+	_ = jsonUnmarshal(procedureDurationsJSON, &procedureDurations)
+	if procedureDurations == nil {
+		procedureDurations = map[string]int{}
+	}
+
+	return aggregate.ReconstituteSchedule(
+		id,
+		sharedtypes.ProfessionalID(professionalID),
+		sharedtypes.ClinicID(clinicID),
+		workingHours,
+		[]aggregate.ExceptionDay{},
+		[]aggregate.BlockedSlot{},
+		[]aggregate.BookedSlot{},
+		procedureDurations,
+		isActive,
+		updatedAt,
+		version,
+	), nil
+}
+
+func jsonUnmarshal(data []byte, v any) error {
+	if len(data) == 0 {
+		return nil
+	}
+	return json.Unmarshal(data, v)
 }
