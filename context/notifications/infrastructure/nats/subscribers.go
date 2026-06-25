@@ -169,6 +169,7 @@ type appointmentCancelledPayload struct {
 	AppointmentID      string    `json:"appointment_id"`
 	PatientID          string    `json:"patient_id"`
 	ProfessionalID     string    `json:"professional_id"`
+	ClinicID           string    `json:"clinic_id"`
 	SlotStart          time.Time `json:"slot_start"`
 	SlotEnd            time.Time `json:"slot_end"`
 	Reason             string    `json:"reason"`
@@ -195,15 +196,16 @@ type appointmentCompletedPayload struct {
 }
 
 type appointmentNoShowPayload struct {
-	AppointmentID  string    `json:"appointment_id"`
-	PatientID      string    `json:"patient_id"`
-	ProfessionalID string    `json:"professional_id"`
-	SlotStart      time.Time `json:"slot_start"`
-	SlotEnd        time.Time `json:"slot_end"`
-	PatientName    string    `json:"patient_name"`
-	PatientPhone   string    `json:"patient_phone"`
-	PatientEmail   string    `json:"patient_email"`
-	ProfessionalName string  `json:"professional_name"`
+	AppointmentID    string    `json:"appointment_id"`
+	PatientID        string    `json:"patient_id"`
+	ProfessionalID   string    `json:"professional_id"`
+	ClinicID         string    `json:"clinic_id"`
+	SlotStart        time.Time `json:"slot_start"`
+	SlotEnd          time.Time `json:"slot_end"`
+	PatientName      string    `json:"patient_name"`
+	PatientPhone     string    `json:"patient_phone"`
+	PatientEmail     string    `json:"patient_email"`
+	ProfessionalName string    `json:"professional_name"`
 }
 
 type patientRegisteredPayload struct {

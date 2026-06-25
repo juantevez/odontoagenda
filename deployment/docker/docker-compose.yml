@@ -202,12 +202,17 @@ services:
     container_name: odontoagenda-notifications
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy
       nats-init:
         condition: service_completed_successfully
     environment:
       SERVICE_NAME:           "odontoagenda-notifications"
       PORT:                   "8086"
+      DATABASE_URL:           "postgres://odontoagenda:odontoagenda@postgres:5432/odontoagenda"
       NATS_URL:               "nats://nats:4222"
+      JWT_SECRET:             "${JWT_SECRET}"
+      JWT_ISSUER:             "odontoagenda.iam"
       NOTIFICATIONS_LOG_ONLY: "true"
       # Descomentar para habilitar canales reales:
       # WHATSAPP_ENABLED:     "true"

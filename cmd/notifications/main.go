@@ -69,6 +69,9 @@ type config struct {
 	ServiceName string
 	Port        string
 	NATSUrl     string
+	DatabaseURL string
+	JWTSecret   string
+	JWTIssuer   string
 
 	// Canales de envío — en el MVP son stubs; se activan con las vars de entorno.
 	// WhatsApp (Twilio / Baileys)
@@ -77,15 +80,15 @@ type config struct {
 	WhatsAppToken       string
 
 	// Email (SendGrid / SMTP)
-	EmailEnabled  bool
-	EmailFrom     string
+	EmailEnabled   bool
+	EmailFrom      string
 	SendGridAPIKey string
 
 	// SMS (Twilio)
-	SMSEnabled        bool
-	TwilioAccountSID  string
-	TwilioAuthToken   string
-	TwilioFromNumber  string
+	SMSEnabled       bool
+	TwilioAccountSID string
+	TwilioAuthToken  string
+	TwilioFromNumber string
 
 	// Opciones de comportamiento
 	LogOnlyMode bool // true = solo loguea, no envía (útil en tests y CI)
@@ -96,6 +99,9 @@ func mustLoadConfig() config {
 		ServiceName: getEnv("SERVICE_NAME", "odontoagenda-notifications"),
 		Port:        getEnv("PORT", "8086"),
 		NATSUrl:     getEnv("NATS_URL", "nats://localhost:4222"),
+		DatabaseURL: getEnv("DATABASE_URL", ""),
+		JWTSecret:   getEnv("JWT_SECRET", ""),
+		JWTIssuer:   getEnv("JWT_ISSUER", "odontoagenda.iam"),
 
 		WhatsAppEnabled:     getEnvBool("WHATSAPP_ENABLED", false),
 		WhatsAppProviderURL: getEnv("WHATSAPP_PROVIDER_URL", ""),
