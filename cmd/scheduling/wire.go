@@ -72,7 +72,7 @@ func initApp(cfg config) (*app, error) {
 	bookHandler     := schedulingcmd.NewBookAppointmentHandler(bookSaga, apptRepo)
 	cancelHandler   := schedulingcmd.NewCancelAppointmentHandler(apptRepo, scheduleRepo, cache, bus)
 	completeHandler := schedulingcmd.NewCompleteAppointmentHandler(apptRepo, bus)
-	checkInHandler  := schedulingcmd.NewCheckInAppointmentHandler(apptRepo)
+	checkInHandler  := schedulingcmd.NewCheckInAppointmentHandler(apptRepo, bus)
 	noShowHandler   := schedulingcmd.NewMarkNoShowHandler(apptRepo, scheduleRepo, cache, bus)
 	blockSlotHandler := schedulingcmd.NewBlockSlotHandler(scheduleRepo, cache, bus)
 

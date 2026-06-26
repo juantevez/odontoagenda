@@ -229,6 +229,14 @@ func (a *Appointment) CheckIn() error {
 	a.status = valueobject.StatusInProgress
 	a.updatedAt = time.Now().UTC()
 	a.version++
+	a.pendingEvents = append(a.pendingEvents, event.AppointmentCheckedIn{
+		AppointmentID:  a.id,
+		PatientID:      a.patientID,
+		ProfessionalID: a.professionalID,
+		ClinicID:       a.clinicID,
+		SlotStart:      a.slot.Start,
+		OccurredAt:     a.updatedAt,
+	})
 	return nil
 }
 

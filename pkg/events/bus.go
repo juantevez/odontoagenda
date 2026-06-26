@@ -144,6 +144,7 @@ var knownStreams = map[string]streamSpec{
 			"appointment.completed",
 			"appointment.cancelled",
 			"appointment.no_show",
+			"appointment.checked_in",
 			"scheduling.availability.updated",
 		},
 		MaxAge:   7 * 24 * time.Hour,

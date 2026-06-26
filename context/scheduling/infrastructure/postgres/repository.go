@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/aggregate"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/valueobject"
+	sharederrors "github.com/juantevez/odontoagenda/pkg/shared/errors"
 	sharedtypes "github.com/juantevez/odontoagenda/pkg/shared/types"
 )
 
@@ -59,14 +60,14 @@ func (r *AppointmentPostgresRepository) Update(ctx context.Context, a *aggregate
 		string(a.Status()), nullString(a.ClinicalNotes()),
 		nullString(string(a.CancellationReason())), nullString(a.CancellationNote()),
 		a.CancelledAt(), a.CancelledByUserID(), a.IsLateCancellation(),
-		time.Now().UTC(), a.ID(), a.Version(),
+		time.Now().UTC(), a.ID(), a.Version()-1,
 	)
 	_ = slot
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("optimistic lock conflict: appointment %s modified concurrently", a.ID())
+		return sharederrors.NewConflict("appointment modified concurrently", nil)
 	}
 	return nil
 }

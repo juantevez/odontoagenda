@@ -40,6 +40,7 @@ const (
 	TypeAppointmentReminder  NotificationType = "appointment_reminder"
 	TypeAppointmentCompleted NotificationType = "appointment_completed"
 	TypeAppointmentNoShow    NotificationType = "appointment_no_show"
+	TypePatientCheckedIn     NotificationType = "patient_checked_in"
 
 	// Pacientes
 	TypePatientWelcome NotificationType = "patient_welcome"

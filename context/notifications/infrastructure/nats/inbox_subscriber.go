@@ -42,6 +42,7 @@ func (s *InboxEventSubscriber) RegisterAll(ctx context.Context) error {
 		{"APPOINTMENT_EVENTS", "appointment.booked", "inbox-appt-booked", s.handleBooked},
 		{"APPOINTMENT_EVENTS", "appointment.cancelled", "inbox-appt-cancelled", s.handleCancelled},
 		{"APPOINTMENT_EVENTS", "appointment.no_show", "inbox-appt-no-show", s.handleNoShow},
+		{"APPOINTMENT_EVENTS", "appointment.checked_in", "inbox-appt-checked-in", s.handleCheckedIn},
 		{"PROFESSIONAL_EVENTS", "professional.license.expiring_soon", "inbox-license-expiring", s.handleLicenseExpiring},
 	}
 
@@ -115,6 +116,34 @@ func (s *InboxEventSubscriber) handleNoShow(ctx context.Context, env pkgevents.E
 		ReferenceID: p.AppointmentID,
 		Title:       "Paciente no se presentó",
 		Body:        fmt.Sprintf("%s no se presentó al turno del %s con %s", patient, formatSlot(p.SlotStart), prof),
+	})
+}
+
+type appointmentCheckedInPayload struct {
+	AppointmentID  string    `json:"appointment_id"`
+	PatientID      string    `json:"patient_id"`
+	ProfessionalID string    `json:"professional_id"`
+	ClinicID       string    `json:"clinic_id"`
+	SlotStart      time.Time `json:"slot_start"`
+	PatientName    string    `json:"patient_name"`
+	ProfessionalName string  `json:"professional_name"`
+}
+
+func (s *InboxEventSubscriber) handleCheckedIn(ctx context.Context, env pkgevents.Envelope) error {
+	p, err := pkgevents.UnmarshalPayload[appointmentCheckedInPayload](env)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "inbox: error deserializando appointment.checked_in", "error", err)
+		return pkgevents.ErrSkipRetry
+	}
+	clinicID := parseOptionalUUID(p.ClinicID)
+	patient := fallback(p.PatientName, "Paciente")
+	prof := fallback(p.ProfessionalName, "Profesional")
+	return s.handler.Handle(ctx, notifcmd.WriteInboxCommand{
+		Type:        valueobject.TypePatientCheckedIn,
+		ClinicID:    clinicID,
+		ReferenceID: p.AppointmentID,
+		Title:       "Paciente en sala",
+		Body:        fmt.Sprintf("%s está en espera para el turno de las %s con %s", patient, p.SlotStart.Format("15:04"), prof),
 	})
 }
 

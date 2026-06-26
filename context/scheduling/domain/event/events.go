@@ -46,6 +46,26 @@ func (e AppointmentBooked) AggregateType() string  { return "Appointment" }
 func (e AppointmentBooked) BoundedContext() string { return boundedContext }
 func (e AppointmentBooked) SchemaVersion() int     { return 1 }
 
+// ── AppointmentCheckedIn ──────────────────────────────────────────
+
+// AppointmentCheckedIn se publica cuando el paciente llega a la clínica y es
+// registrado en sala (transición Confirmed → InProgress).
+// Consumido por: Notifications (aviso al profesional de que su próximo paciente está en espera).
+type AppointmentCheckedIn struct {
+	AppointmentID  sharedtypes.AppointmentID  `json:"appointment_id"`
+	PatientID      sharedtypes.PatientID      `json:"patient_id"`
+	ProfessionalID sharedtypes.ProfessionalID `json:"professional_id"`
+	ClinicID       sharedtypes.ClinicID       `json:"clinic_id"`
+	SlotStart      time.Time                  `json:"slot_start"`
+	OccurredAt     time.Time                  `json:"occurred_at"`
+}
+
+func (e AppointmentCheckedIn) EventType() string      { return "appointment.checked_in" }
+func (e AppointmentCheckedIn) AggregateID() string    { return e.AppointmentID.String() }
+func (e AppointmentCheckedIn) AggregateType() string  { return "Appointment" }
+func (e AppointmentCheckedIn) BoundedContext() string { return boundedContext }
+func (e AppointmentCheckedIn) SchemaVersion() int     { return 1 }
+
 // ── AppointmentConfirmed ──────────────────────────────────────────
 
 // AppointmentConfirmed se publica cuando una cita Pending pasa a Confirmed.

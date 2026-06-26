@@ -217,12 +217,14 @@ type CheckInAppointmentCommand struct {
 
 type CheckInAppointmentHandler struct {
 	apptRepo repository.AppointmentRepository
+	eventBus events.Bus
 	logger   *slog.Logger
 }
 
-func NewCheckInAppointmentHandler(apptRepo repository.AppointmentRepository) *CheckInAppointmentHandler {
+func NewCheckInAppointmentHandler(apptRepo repository.AppointmentRepository, eventBus events.Bus) *CheckInAppointmentHandler {
 	return &CheckInAppointmentHandler{
 		apptRepo: apptRepo,
+		eventBus: eventBus,
 		logger:   slog.Default().With("handler", "CheckInAppointment"),
 	}
 }
@@ -239,6 +241,12 @@ func (h *CheckInAppointmentHandler) Handle(ctx context.Context, cmd CheckInAppoi
 
 	if err := h.apptRepo.Update(ctx, appt); err != nil {
 		return fmt.Errorf("CheckInAppointment: update: %w", err)
+	}
+
+	for _, evt := range appt.PendingEvents() {
+		if err := h.eventBus.Publish(ctx, evt); err != nil {
+			h.logger.WarnContext(ctx, "error publicando evento", "event_type", evt.EventType(), "error", err)
+		}
 	}
 
 	h.logger.InfoContext(ctx, "check-in registrado", "appointment_id", cmd.AppointmentID)
