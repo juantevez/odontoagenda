@@ -78,6 +78,14 @@ const (
 	CoverageStatusExpired   CoverageStatus = "Expired"
 )
 
+func ParseCoverageStatus(s string) (CoverageStatus, error) {
+	switch CoverageStatus(s) {
+	case CoverageStatusActive, CoverageStatusSuspended, CoverageStatusExpired:
+		return CoverageStatus(s), nil
+	}
+	return "", fmt.Errorf("coverage status inválido: %q", s)
+}
+
 // ── Benefit — Value Object ────────────────────────────────────────
 
 // Benefit describe una prestación cubierta por el plan del paciente.
@@ -118,12 +126,8 @@ func NewPatientCoverage(
 	createdBy uuid.UUID,
 ) (*PatientCoverage, error) {
 
-	// Tipos no-Privado requieren agreementID y providerName.
+	// Tipos no-Privado requieren providerName (agreement_id es opcional en MVP).
 	if coverageType != valueobject.CoverageTypePrivate {
-		if agreementID == nil {
-			return nil, sharederrors.NewInvalidArgument("agreement_id",
-				fmt.Sprintf("requerido para cobertura tipo '%s'", coverageType))
-		}
 		if strings.TrimSpace(providerName) == "" {
 			return nil, sharederrors.NewInvalidArgument("provider_name",
 				"requerido para cobertura no-privada")
@@ -153,6 +157,40 @@ func NewPatientCoverage(
 		updatedAt:        time.Now().UTC(),
 		createdBy:        createdBy,
 	}, nil
+}
+
+// ReconstituteCoverage reconstruye una PatientCoverage desde la persistencia,
+// preservando el id original (a diferencia de NewPatientCoverage que genera un uuid nuevo).
+func ReconstituteCoverage(
+	id uuid.UUID,
+	patientID sharedtypes.PatientID,
+	coverageType valueobject.CoverageType,
+	status CoverageStatus,
+	agreementID *uuid.UUID,
+	providerName, planCode, membershipNumber string,
+	validFrom time.Time,
+	validUntil *time.Time,
+	createdAt, updatedAt time.Time,
+	createdBy uuid.UUID,
+) *PatientCoverage {
+	return &PatientCoverage{
+		id:               id,
+		patientID:        patientID,
+		coverageType:     coverageType,
+		status:           status,
+		agreementID:      agreementID,
+		providerName:     providerName,
+		planCode:         planCode,
+		membershipNumber: membershipNumber,
+		validFrom:        validFrom,
+		validUntil:       validUntil,
+		annualLimits:     make(map[string]int64),
+		remainingLimits:  make(map[string]int64),
+		benefits:         []Benefit{},
+		createdAt:        createdAt,
+		updatedAt:        updatedAt,
+		createdBy:        createdBy,
+	}
 }
 
 // ── Comportamiento de dominio ─────────────────────────────────────

@@ -27,19 +27,21 @@ func RegisterRoutes(
 	addCoverageHandler *command.AddCoverageHandler,
 	addAlertHandler *command.AddMedicalAlertHandler,
 	mergeHandler *command.MergePatientsHandler,
+	updateContactHandler *command.UpdateContactInfoHandler,
 	getByIDHandler *query.GetPatientByIDHandler,
 	searchHandler *query.SearchPatientsHandler,
 	forBookingHandler *query.GetPatientForBookingHandler,
 ) {
 	h := &patientHTTPHandler{
-		register:    registerHandler,
-		addCoverage: addCoverageHandler,
-		addAlert:    addAlertHandler,
-		merge:       mergeHandler,
-		getByID:     getByIDHandler,
-		search:      searchHandler,
-		forBooking:  forBookingHandler,
-		logger:      slog.Default().With("adapter", "patient.http"),
+		register:      registerHandler,
+		addCoverage:   addCoverageHandler,
+		addAlert:      addAlertHandler,
+		merge:         mergeHandler,
+		updateContact: updateContactHandler,
+		getByID:       getByIDHandler,
+		search:        searchHandler,
+		forBooking:    forBookingHandler,
+		logger:        slog.Default().With("adapter", "patient.http"),
 	}
 
 	r.Group(func(r chi.Router) {
@@ -51,10 +53,6 @@ func RegisterRoutes(
 		r.Get("/patients/{patientId}/for-booking", h.GetForBooking)
 
 		// ── Alta de paciente: SOLO staff ──────────────────────────
-		// FIX: antes no había restricción de rol.
-		// Un usuario 'paciente' NO puede crear un registro Patient via esta ruta.
-		// El alta de un paciente que se auto-registra ocurre vía el subscriber
-		// de IAM (user.registered → Patient BC crea el Patient automáticamente).
 		r.Post("/patients",
 			middleware.RequireRoles(
 				middleware.RoleReceptionist,
@@ -72,6 +70,9 @@ func RegisterRoutes(
 			)(http.HandlerFunc(h.AddCoverage)).ServeHTTP,
 		)
 
+		// ── Contacto: staff + el propio paciente ──────────────────
+		r.Put("/patients/{patientId}/contact", h.UpdateContact)
+
 		// ── Alertas médicas: staff + el propio paciente ───────────
 		r.Post("/patients/{patientId}/medical-alerts", h.AddMedicalAlert)
 
@@ -88,14 +89,15 @@ func RegisterRoutes(
 // ── Handler struct ────────────────────────────────────────────────
 
 type patientHTTPHandler struct {
-	register    *command.RegisterPatientHandler
-	addCoverage *command.AddCoverageHandler
-	addAlert    *command.AddMedicalAlertHandler
-	merge       *command.MergePatientsHandler
-	getByID     *query.GetPatientByIDHandler
-	search      *query.SearchPatientsHandler
-	forBooking  *query.GetPatientForBookingHandler
-	logger      *slog.Logger
+	register      *command.RegisterPatientHandler
+	addCoverage   *command.AddCoverageHandler
+	addAlert      *command.AddMedicalAlertHandler
+	merge         *command.MergePatientsHandler
+	updateContact *command.UpdateContactInfoHandler
+	getByID       *query.GetPatientByIDHandler
+	search        *query.SearchPatientsHandler
+	forBooking    *query.GetPatientForBookingHandler
+	logger        *slog.Logger
 }
 
 // ── POST /patients ────────────────────────────────────────────────
@@ -393,6 +395,44 @@ func (h *patientHTTPHandler) MergePatients(w http.ResponseWriter, r *http.Reques
 
 func parsePatientID(r *http.Request) (sharedtypes.PatientID, error) {
 	return uuid.Parse(chi.URLParam(r, "patientId"))
+}
+
+// ── PUT /patients/{patientId}/contact ────────────────────────────
+
+type updateContactRequest struct {
+	Phone          string `json:"phone"`
+	Email          string `json:"email,omitempty"`
+	WhatsApp       string `json:"whatsapp,omitempty"`
+	EmergencyName  string `json:"emergency_name,omitempty"`
+	EmergencyPhone string `json:"emergency_phone,omitempty"`
+}
+
+func (h *patientHTTPHandler) UpdateContact(w http.ResponseWriter, r *http.Request) {
+	patientID, err := uuid.Parse(chi.URLParam(r, "patientId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "patientId inválido")
+		return
+	}
+
+	var req updateContactRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cuerpo inválido")
+		return
+	}
+
+	if err := h.updateContact.Handle(r.Context(), command.UpdateContactInfoCommand{
+		PatientID:      sharedtypes.PatientID(patientID),
+		Phone:          req.Phone,
+		Email:          req.Email,
+		WhatsApp:       req.WhatsApp,
+		EmergencyName:  req.EmergencyName,
+		EmergencyPhone: req.EmergencyPhone,
+	}); err != nil {
+		writeErrorFromDomain(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

@@ -414,6 +414,83 @@ func (h *MergePatientsHandler) Handle(ctx context.Context, cmd MergePatientsComm
 	return nil
 }
 
+// ── UpdateContactInfo ─────────────────────────────────────────────
+
+type UpdateContactInfoCommand struct {
+	PatientID      sharedtypes.PatientID
+	Phone          string
+	Email          string
+	WhatsApp       string
+	EmergencyName  string
+	EmergencyPhone string
+}
+
+type UpdateContactInfoHandler struct {
+	repo   repository.PatientRepository
+	logger *slog.Logger
+}
+
+func NewUpdateContactInfoHandler(repo repository.PatientRepository) *UpdateContactInfoHandler {
+	return &UpdateContactInfoHandler{
+		repo:   repo,
+		logger: slog.Default().With("handler", "UpdateContactInfo"),
+	}
+}
+
+func (h *UpdateContactInfoHandler) Handle(ctx context.Context, cmd UpdateContactInfoCommand) error {
+	p, err := h.repo.FindByID(ctx, cmd.PatientID)
+	if err != nil {
+		return err
+	}
+
+	phone, err := sharedvo.NewPhoneNumber(cmd.Phone)
+	if err != nil {
+		return sharederrors.NewInvalidArgument("phone", err.Error())
+	}
+
+	var emailVO *sharedvo.Email
+	if cmd.Email != "" {
+		e, err := sharedvo.NewEmail(cmd.Email)
+		if err != nil {
+			return sharederrors.NewInvalidArgument("email", err.Error())
+		}
+		emailVO = &e
+	}
+
+	var whatsappVO *sharedvo.PhoneNumber
+	if cmd.WhatsApp != "" {
+		wa, err := sharedvo.NewPhoneNumber(cmd.WhatsApp)
+		if err != nil {
+			return sharederrors.NewInvalidArgument("whatsapp", err.Error())
+		}
+		whatsappVO = &wa
+	}
+
+	var emergencyPhone *sharedvo.PhoneNumber
+	if cmd.EmergencyPhone != "" {
+		ep, err := sharedvo.NewPhoneNumber(cmd.EmergencyPhone)
+		if err != nil {
+			return sharederrors.NewInvalidArgument("emergency_phone", err.Error())
+		}
+		emergencyPhone = &ep
+	}
+
+	p.UpdateContactInfo(aggregate.ContactInfo{
+		Phone:          phone,
+		Email:          emailVO,
+		WhatsApp:       whatsappVO,
+		EmergencyName:  cmd.EmergencyName,
+		EmergencyPhone: emergencyPhone,
+	})
+
+	if err := h.repo.Update(ctx, p); err != nil {
+		return fmt.Errorf("UpdateContactInfo: update: %w", err)
+	}
+
+	h.logger.InfoContext(ctx, "contacto actualizado", "patient_id", cmd.PatientID)
+	return nil
+}
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 func (h *RegisterPatientHandler) publishPendingEvents(ctx context.Context, p *aggregate.Patient) {

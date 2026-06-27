@@ -58,6 +58,7 @@ func initApp(cfg config) (*app, error) {
 	addCoverageHandler := patientcmd.NewAddCoverageHandler(patientRepo, historyRepo, bus)
 	addAlertHandler := patientcmd.NewAddMedicalAlertHandler(patientRepo, bus)
 	mergeHandler := patientcmd.NewMergePatientsHandler(patientRepo, bus)
+	updateContactHandler := patientcmd.NewUpdateContactInfoHandler(patientRepo)
 	recordVisitHandler := patientcmd.NewRecordCompletedVisitHandler(patientRepo)
 
 	// ── 5. Query Handlers ─────────────────────────────────────────
@@ -94,6 +95,7 @@ func initApp(cfg config) (*app, error) {
 			addCoverageHandler,
 			addAlertHandler,
 			mergeHandler,
+			updateContactHandler,
 			getByIDHandler,
 			searchHandler,
 			forBookingHandler,

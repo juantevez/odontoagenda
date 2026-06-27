@@ -585,25 +585,21 @@ func (r *PatientPostgresRepository) loadCoverages(ctx context.Context, patientID
 			continue // dato desconocido: skip
 		}
 
-		cov, err := coverage.NewPatientCoverage(
-			patientID, ct,
-			agreementID,
-			strOrEmpty(providerName), strOrEmpty(planCode), strOrEmpty(membershipNum),
-			validFrom, validUntil,
-			createdBy,
-		)
+		st, err := coverage.ParseCoverageStatus(status)
 		if err != nil {
 			continue
 		}
+		cov := coverage.ReconstituteCoverage(
+			id, patientID, ct, st,
+			agreementID,
+			strOrEmpty(providerName), strOrEmpty(planCode), strOrEmpty(membershipNum),
+			validFrom, validUntil,
+			createdAt, updatedAt, createdBy,
+		)
 		if coPayPercent != nil {
 			_ = cov.SetCoPayPercent(*coPayPercent)
 		} else if coPayFixed != nil {
 			_ = cov.SetCoPayFixed(*coPayFixed)
-		}
-		if status == "Suspended" {
-			_ = cov.Suspend("reconstituted from DB", uuid.Nil)
-		} else if status == "Expired" {
-			cov.Expire()
 		}
 		coverages = append(coverages, cov)
 	}
