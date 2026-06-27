@@ -140,6 +140,41 @@ type DistributedLock interface {
 	Release(ctx context.Context, key string, lockToken string) error
 }
 
+// ── SlotHold — bloqueo temporal de un slot ────────────────────────
+
+// SlotHold representa un bloqueo temporal mientras un usuario completa la reserva.
+type SlotHold struct {
+	ID             uuid.UUID
+	ProfessionalID sharedtypes.ProfessionalID
+	ClinicID       sharedtypes.ClinicID
+	SlotStart      time.Time
+	SlotEnd        time.Time
+	HeldBy         uuid.UUID // user_id
+	HeldUntil      time.Time
+}
+
+// SlotHoldRepository es el puerto de salida para slot_holds.
+type SlotHoldRepository interface {
+	// Create inserta un hold. Retorna ErrConflict si ya existe un hold activo para ese slot.
+	Create(ctx context.Context, hold *SlotHold) error
+
+	// Release elimina un hold por su ID (liberación anticipada por el usuario).
+	Release(ctx context.Context, holdID uuid.UUID) error
+
+	// ActiveStartTimesForDay devuelve los slot_start con holds activos (held_until > now())
+	// para un (professional_id, clinic_id) en la fecha indicada.
+	// Usado por GetAvailabilityHandler para filtrar la grilla.
+	ActiveStartTimesForDay(
+		ctx context.Context,
+		professionalID sharedtypes.ProfessionalID,
+		clinicID sharedtypes.ClinicID,
+		date time.Time,
+	) ([]time.Time, error)
+
+	// DeleteExpired borra los holds ya expirados. Llamado por el cleanup worker.
+	DeleteExpired(ctx context.Context) (int64, error)
+}
+
 // ── FreeSlot — DTO de respuesta de cache/cálculo ─────────────────
 // Definido en aggregate para que repository pueda referenciarlo.
 // (En Go, ponemos DTOs simples en el paquete aggregate para evitar ciclos)

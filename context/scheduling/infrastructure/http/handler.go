@@ -25,6 +25,8 @@ func RegisterRoutes(
 	checkInHandler       *command.CheckInAppointmentHandler,
 	noShowHandler        *command.MarkNoShowHandler,
 	blockSlotHandler     *command.BlockSlotHandler,
+	holdSlotHandler      *command.HoldSlotHandler,
+	releaseHoldHandler   *command.ReleaseHoldHandler,
 	getAvailHandler      *query.GetAvailabilityHandler,
 	getAvailRangeHandler *query.GetAvailabilityRangeHandler,
 	getDayHandler        *query.GetDayScheduleHandler,
@@ -37,6 +39,8 @@ func RegisterRoutes(
 		checkIn:       checkInHandler,
 		noShow:        noShowHandler,
 		blockSlot:     blockSlotHandler,
+		holdSlot:      holdSlotHandler,
+		releaseHold:   releaseHoldHandler,
 		getAvail:      getAvailHandler,
 		getAvailRange: getAvailRangeHandler,
 		getDay:        getDayHandler,
@@ -93,6 +97,10 @@ func RegisterRoutes(
 				middleware.RoleSuperAdmin,
 			)(http.HandlerFunc(h.BlockSlot)).ServeHTTP,
 		)
+
+		// Holds temporales de slots (Mapa de Muelas)
+		r.Post("/scheduling/hold", h.HoldSlot)
+		r.Delete("/scheduling/hold/{holdId}", h.ReleaseHold)
 	})
 }
 
@@ -105,6 +113,8 @@ type schedulingHTTPHandler struct {
 	checkIn       *command.CheckInAppointmentHandler
 	noShow        *command.MarkNoShowHandler
 	blockSlot     *command.BlockSlotHandler
+	holdSlot      *command.HoldSlotHandler
+	releaseHold   *command.ReleaseHoldHandler
 	getAvail      *query.GetAvailabilityHandler
 	getAvailRange *query.GetAvailabilityRangeHandler
 	getDay        *query.GetDayScheduleHandler
@@ -430,6 +440,79 @@ func (h *schedulingHTTPHandler) BlockSlot(w http.ResponseWriter, r *http.Request
 		Note:           req.Note,
 		BlockedBy:      claims.UserID,
 	}); err != nil {
+		writeErrorFromDomain(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── POST /scheduling/hold ─────────────────────────────────────────
+
+type holdSlotRequest struct {
+	ProfessionalID string `json:"professional_id"`
+	ClinicID       string `json:"clinic_id"`
+	SlotStart      string `json:"slot_start"` // RFC3339
+	SlotEnd        string `json:"slot_end"`
+}
+
+func (h *schedulingHTTPHandler) HoldSlot(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "no autenticado")
+		return
+	}
+	var req holdSlotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cuerpo inválido")
+		return
+	}
+	profID, err := uuid.Parse(req.ProfessionalID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "professional_id inválido")
+		return
+	}
+	clinicID, err := uuid.Parse(req.ClinicID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "clinic_id inválido")
+		return
+	}
+	slotStart, err := time.Parse(time.RFC3339, req.SlotStart)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "slot_start debe ser RFC3339")
+		return
+	}
+	slotEnd, err := time.Parse(time.RFC3339, req.SlotEnd)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "slot_end debe ser RFC3339")
+		return
+	}
+
+	result, err := h.holdSlot.Handle(r.Context(), command.HoldSlotCommand{
+		ProfessionalID: sharedtypes.ProfessionalID(profID),
+		ClinicID:       sharedtypes.ClinicID(clinicID),
+		SlotStart:      slotStart,
+		SlotEnd:        slotEnd,
+		HeldBy:         claims.UserID,
+	})
+	if err != nil {
+		writeErrorFromDomain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"hold_id":    result.HoldID.String(),
+		"expires_at": result.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+// ── DELETE /scheduling/hold/{holdId} ─────────────────────────────
+
+func (h *schedulingHTTPHandler) ReleaseHold(w http.ResponseWriter, r *http.Request) {
+	holdID, err := uuid.Parse(chi.URLParam(r, "holdId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "holdId inválido")
+		return
+	}
+	if err := h.releaseHold.Handle(r.Context(), command.ReleaseHoldCommand{HoldID: holdID}); err != nil {
 		writeErrorFromDomain(w, err)
 		return
 	}

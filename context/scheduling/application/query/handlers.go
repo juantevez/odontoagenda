@@ -61,29 +61,33 @@ type GetAvailabilityQuery struct {
 
 type GetAvailabilityHandler struct {
 	scheduleRepo   repository.AvailabilityScheduleRepository
+	holdRepo       repository.SlotHoldRepository
 	cache          repository.AvailabilityCache
 	slotCalculator *service.SlotCalculator
 }
 
 func NewGetAvailabilityHandler(
 	scheduleRepo repository.AvailabilityScheduleRepository,
+	holdRepo repository.SlotHoldRepository,
 	cache repository.AvailabilityCache,
 	slotCalculator *service.SlotCalculator,
 ) *GetAvailabilityHandler {
 	return &GetAvailabilityHandler{
 		scheduleRepo:   scheduleRepo,
+		holdRepo:       holdRepo,
 		cache:          cache,
 		slotCalculator: slotCalculator,
 	}
 }
 
 func (h *GetAvailabilityHandler) Handle(ctx context.Context, q GetAvailabilityQuery) (*AvailabilityResultDTO, error) {
-	// 1. Intentar desde cache (Redis).
+	// 1. Intentar desde cache (Redis) — el cache no conoce holds, se omite cuando existen.
 	cached, err := h.cache.GetSlots(ctx,
 		q.ProfessionalID, q.ClinicID, q.Date, q.ProcedureCode,
 	)
 	if err == nil && cached != nil {
-		return toAvailabilityResultDTO(q.ProfessionalID, q.ClinicID, q.Date, cached), nil
+		slots := h.filterHeld(ctx, q.ProfessionalID, q.ClinicID, q.Date, cached)
+		return toAvailabilityResultDTO(q.ProfessionalID, q.ClinicID, q.Date, slots), nil
 	}
 
 	// 2. Cache miss: calcular desde el AvailabilitySchedule.
@@ -103,10 +107,41 @@ func (h *GetAvailabilityHandler) Handle(ctx context.Context, q GetAvailabilityQu
 		return nil, err
 	}
 
-	// 3. Guardar en cache para próximas consultas.
+	// 3. Guardar en cache para próximas consultas (sin filtrar holds — el cache es genérico).
 	_ = h.cache.SetSlots(ctx, q.ProfessionalID, q.ClinicID, q.Date, q.ProcedureCode, slots)
 
+	// 4. Filtrar slots con hold activo antes de responder.
+	slots = h.filterHeld(ctx, q.ProfessionalID, q.ClinicID, q.Date, slots)
+
 	return toAvailabilityResultDTO(q.ProfessionalID, q.ClinicID, q.Date, slots), nil
+}
+
+// filterHeld elimina de slots los que tienen un hold activo en la BD.
+func (h *GetAvailabilityHandler) filterHeld(
+	ctx context.Context,
+	profID sharedtypes.ProfessionalID,
+	clinicID sharedtypes.ClinicID,
+	date time.Time,
+	slots []aggregate.FreeSlot,
+) []aggregate.FreeSlot {
+	if h.holdRepo == nil || len(slots) == 0 {
+		return slots
+	}
+	heldTimes, err := h.holdRepo.ActiveStartTimesForDay(ctx, profID, clinicID, date)
+	if err != nil || len(heldTimes) == 0 {
+		return slots
+	}
+	heldSet := make(map[time.Time]struct{}, len(heldTimes))
+	for _, t := range heldTimes {
+		heldSet[t.UTC()] = struct{}{}
+	}
+	filtered := slots[:0]
+	for _, s := range slots {
+		if _, held := heldSet[s.Slot.Start.UTC()]; !held {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
 }
 
 // ── GetAvailabilityRange ──────────────────────────────────────────

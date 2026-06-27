@@ -54,6 +54,7 @@ func initApp(cfg config) (*app, error) {
 
 	apptRepo     := schedulingpg.NewAppointmentPostgresRepository(pool)
 	scheduleRepo := schedulingpg.NewAvailabilitySchedulePostgresRepository(pool)
+	holdRepo     := schedulingpg.NewSlotHoldPostgresRepository(pool)
 	cache        := schedulingredis.NewAvailabilityCacheRedis(redisClient)
 
 	// ── 3. Domain Services ────────────────────────────────────────
@@ -75,10 +76,12 @@ func initApp(cfg config) (*app, error) {
 	checkInHandler  := schedulingcmd.NewCheckInAppointmentHandler(apptRepo, bus)
 	noShowHandler   := schedulingcmd.NewMarkNoShowHandler(apptRepo, scheduleRepo, cache, bus)
 	blockSlotHandler := schedulingcmd.NewBlockSlotHandler(scheduleRepo, cache, bus)
+	holdSlotHandler  := schedulingcmd.NewHoldSlotHandler(holdRepo)
+	releaseHoldHandler := schedulingcmd.NewReleaseHoldHandler(holdRepo)
 
 	// ── 6. Query Handlers ─────────────────────────────────────────
 
-	getAvailHandler      := schedulingqry.NewGetAvailabilityHandler(scheduleRepo, cache, slotCalculator)
+	getAvailHandler      := schedulingqry.NewGetAvailabilityHandler(scheduleRepo, holdRepo, cache, slotCalculator)
 	getAvailRangeHandler := schedulingqry.NewGetAvailabilityRangeHandler(scheduleRepo, slotCalculator)
 	getDayHandler        := schedulingqry.NewGetDayScheduleHandler(apptRepo, scheduleRepo, slotCalculator)
 	getPatientHandler    := schedulingqry.NewGetPatientAppointmentsHandler(apptRepo)
@@ -111,6 +114,8 @@ func initApp(cfg config) (*app, error) {
 			checkInHandler,
 			noShowHandler,
 			blockSlotHandler,
+			holdSlotHandler,
+			releaseHoldHandler,
 			getAvailHandler,
 			getAvailRangeHandler,
 			getDayHandler,
@@ -126,12 +131,29 @@ func initApp(cfg config) (*app, error) {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	return &app{
+	a := &app{
 		httpServer:  srv,
 		eventBus:    bus,
 		pgPool:      pool,
 		subscribers: subscribers,
-	}, nil
+	}
+
+	// Cleanup worker: elimina holds expirados cada 30 segundos.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		logger := newLogger()
+		for range ticker.C {
+			n, err := holdRepo.DeleteExpired(context.Background())
+			if err != nil {
+				logger.Error("hold cleanup error", "error", err)
+			} else if n > 0 {
+				logger.Info("holds expirados eliminados", "count", n)
+			}
+		}
+	}()
+
+	return a, nil
 }
 
 func (a *app) close() {

@@ -378,3 +378,62 @@ func (h *BlockSlotHandler) Handle(ctx context.Context, cmd BlockSlotCommand) err
 	)
 	return nil
 }
+
+// ── HoldSlot ──────────────────────────────────────────────────────
+
+const holdTTL = 10 * time.Minute
+
+type HoldSlotCommand struct {
+	ProfessionalID sharedtypes.ProfessionalID
+	ClinicID       sharedtypes.ClinicID
+	SlotStart      time.Time
+	SlotEnd        time.Time
+	HeldBy         uuid.UUID // user_id del solicitante
+}
+
+type HoldSlotResult struct {
+	HoldID    uuid.UUID
+	ExpiresAt time.Time
+}
+
+type HoldSlotHandler struct {
+	holdRepo repository.SlotHoldRepository
+}
+
+func NewHoldSlotHandler(holdRepo repository.SlotHoldRepository) *HoldSlotHandler {
+	return &HoldSlotHandler{holdRepo: holdRepo}
+}
+
+func (h *HoldSlotHandler) Handle(ctx context.Context, cmd HoldSlotCommand) (*HoldSlotResult, error) {
+	hold := &repository.SlotHold{
+		ID:             uuid.New(),
+		ProfessionalID: cmd.ProfessionalID,
+		ClinicID:       cmd.ClinicID,
+		SlotStart:      cmd.SlotStart,
+		SlotEnd:        cmd.SlotEnd,
+		HeldBy:         cmd.HeldBy,
+		HeldUntil:      time.Now().UTC().Add(holdTTL),
+	}
+	if err := h.holdRepo.Create(ctx, hold); err != nil {
+		return nil, err
+	}
+	return &HoldSlotResult{HoldID: hold.ID, ExpiresAt: hold.HeldUntil}, nil
+}
+
+// ── ReleaseHold ───────────────────────────────────────────────────
+
+type ReleaseHoldCommand struct {
+	HoldID uuid.UUID
+}
+
+type ReleaseHoldHandler struct {
+	holdRepo repository.SlotHoldRepository
+}
+
+func NewReleaseHoldHandler(holdRepo repository.SlotHoldRepository) *ReleaseHoldHandler {
+	return &ReleaseHoldHandler{holdRepo: holdRepo}
+}
+
+func (h *ReleaseHoldHandler) Handle(ctx context.Context, cmd ReleaseHoldCommand) error {
+	return h.holdRepo.Release(ctx, cmd.HoldID)
+}

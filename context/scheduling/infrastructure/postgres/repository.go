@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/aggregate"
+	"github.com/juantevez/odontoagenda/context/scheduling/domain/repository"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/valueobject"
 	sharederrors "github.com/juantevez/odontoagenda/pkg/shared/errors"
 	sharedtypes "github.com/juantevez/odontoagenda/pkg/shared/types"
@@ -371,4 +372,87 @@ func jsonUnmarshal(data []byte, v any) error {
 		return nil
 	}
 	return json.Unmarshal(data, v)
+}
+
+// ── SlotHoldPostgresRepository ────────────────────────────────────
+
+type SlotHoldPostgresRepository struct {
+	pool *pgxpool.Pool
+}
+
+func NewSlotHoldPostgresRepository(pool *pgxpool.Pool) *SlotHoldPostgresRepository {
+	return &SlotHoldPostgresRepository{pool: pool}
+}
+
+func (r *SlotHoldPostgresRepository) Create(ctx context.Context, hold *repository.SlotHold) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO scheduling.slot_holds
+			(id, professional_id, clinic_id, slot_start, slot_end, held_by, held_until)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (professional_id, clinic_id, slot_start) DO NOTHING`,
+		hold.ID, hold.ProfessionalID, hold.ClinicID,
+		hold.SlotStart, hold.SlotEnd, hold.HeldBy, hold.HeldUntil,
+	)
+	if err != nil {
+		return err
+	}
+	// Si DO NOTHING disparó (otro hold activo), verificar si el hold fue insertado.
+	var found bool
+	err = r.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM scheduling.slot_holds WHERE id=$1)`, hold.ID,
+	).Scan(&found)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return sharederrors.NewConflict("slot already held by another user", nil)
+	}
+	return nil
+}
+
+func (r *SlotHoldPostgresRepository) Release(ctx context.Context, holdID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM scheduling.slot_holds WHERE id=$1`, holdID)
+	return err
+}
+
+func (r *SlotHoldPostgresRepository) ActiveStartTimesForDay(
+	ctx context.Context,
+	professionalID sharedtypes.ProfessionalID,
+	clinicID sharedtypes.ClinicID,
+	date time.Time,
+) ([]time.Time, error) {
+	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT slot_start FROM scheduling.slot_holds
+		WHERE professional_id=$1 AND clinic_id=$2
+		  AND slot_start >= $3 AND slot_start < $4
+		  AND held_until > now()`,
+		professionalID, clinicID, dayStart, dayEnd,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var times []time.Time
+	for rows.Next() {
+		var t time.Time
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		times = append(times, t)
+	}
+	return times, rows.Err()
+}
+
+func (r *SlotHoldPostgresRepository) DeleteExpired(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`DELETE FROM scheduling.slot_holds WHERE held_until <= now()`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
