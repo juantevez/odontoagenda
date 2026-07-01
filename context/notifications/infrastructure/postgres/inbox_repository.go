@@ -6,14 +6,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juantevez/odontoagenda/context/notifications/domain/entity"
 	"github.com/juantevez/odontoagenda/context/notifications/domain/valueobject"
 )
 
+// dbQuerier abstrae las operaciones del pool usadas por este repositorio,
+// lo que permite inyectar un mock en tests sin necesitar una DB real.
+type dbQuerier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // InboxPostgresRepository implementa repository.InboxRepository sobre PostgreSQL.
 type InboxPostgresRepository struct {
-	pool *pgxpool.Pool
+	pool dbQuerier
 }
 
 func NewInboxPostgresRepository(pool *pgxpool.Pool) *InboxPostgresRepository {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juantevez/odontoagenda/context/professional/domain/aggregate"
 	"github.com/juantevez/odontoagenda/context/professional/domain/valueobject"
@@ -16,8 +17,15 @@ import (
 	sharedvo "github.com/juantevez/odontoagenda/pkg/shared/valueobject"
 )
 
+// dbQuerier abstrae las operaciones del pool, lo que permite inyectar un mock en tests.
+type dbQuerier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type ProfessionalPostgresRepository struct {
-	pool *pgxpool.Pool
+	pool dbQuerier
 }
 
 func NewProfessionalPostgresRepository(pool *pgxpool.Pool) *ProfessionalPostgresRepository {

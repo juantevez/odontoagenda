@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/aggregate"
 	"github.com/juantevez/odontoagenda/context/scheduling/domain/repository"
@@ -18,10 +19,17 @@ import (
 	sharedtypes "github.com/juantevez/odontoagenda/pkg/shared/types"
 )
 
+// dbQuerier abstrae las operaciones del pool para permitir inyección de mocks en tests.
+type dbQuerier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // ── AppointmentPostgresRepository ────────────────────────────────
 
 type AppointmentPostgresRepository struct {
-	pool *pgxpool.Pool
+	pool dbQuerier
 }
 
 func NewAppointmentPostgresRepository(pool *pgxpool.Pool) *AppointmentPostgresRepository {
@@ -244,7 +252,7 @@ func derefString(s *string) string {
 // ── AvailabilitySchedulePostgresRepository ────────────────────────
 
 type AvailabilitySchedulePostgresRepository struct {
-	pool *pgxpool.Pool
+	pool dbQuerier
 }
 
 func NewAvailabilitySchedulePostgresRepository(pool *pgxpool.Pool) *AvailabilitySchedulePostgresRepository {
@@ -377,7 +385,7 @@ func jsonUnmarshal(data []byte, v any) error {
 // ── SlotHoldPostgresRepository ────────────────────────────────────
 
 type SlotHoldPostgresRepository struct {
-	pool *pgxpool.Pool
+	pool dbQuerier
 }
 
 func NewSlotHoldPostgresRepository(pool *pgxpool.Pool) *SlotHoldPostgresRepository {
