@@ -52,28 +52,11 @@ func (r *InboxPostgresRepository) FindByClinic(
 
 	var result []*entity.InboxNotification
 	for rows.Next() {
-		var (
-			id          uuid.UUID
-			notifType   string
-			clinicIDPtr *uuid.UUID
-			referenceID string
-			title, body string
-			readAt      *time.Time
-			createdAt   time.Time
-		)
-		if err := rows.Scan(&id, &notifType, &clinicIDPtr, &referenceID, &title, &body, &readAt, &createdAt); err != nil {
+		n, err := scanInboxRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, &entity.InboxNotification{
-			ID:          id,
-			Type:        valueobject.NotificationType(notifType),
-			ClinicID:    clinicIDPtr,
-			ReferenceID: referenceID,
-			Title:       title,
-			Body:        body,
-			ReadAt:      readAt,
-			CreatedAt:   createdAt,
-		})
+		result = append(result, n)
 	}
 	if result == nil {
 		result = []*entity.InboxNotification{}
@@ -104,4 +87,35 @@ func (r *InboxPostgresRepository) CountUnread(ctx context.Context, clinicID uuid
 		clinicID,
 	).Scan(&count)
 	return count, err
+}
+
+// ── scan helpers ──────────────────────────────────────────────────
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanInboxRow(row rowScanner) (*entity.InboxNotification, error) {
+	var (
+		id          uuid.UUID
+		notifType   string
+		clinicIDPtr *uuid.UUID
+		referenceID string
+		title, body string
+		readAt      *time.Time
+		createdAt   time.Time
+	)
+	if err := row.Scan(&id, &notifType, &clinicIDPtr, &referenceID, &title, &body, &readAt, &createdAt); err != nil {
+		return nil, err
+	}
+	return &entity.InboxNotification{
+		ID:          id,
+		Type:        valueobject.NotificationType(notifType),
+		ClinicID:    clinicIDPtr,
+		ReferenceID: referenceID,
+		Title:       title,
+		Body:        body,
+		ReadAt:      readAt,
+		CreatedAt:   createdAt,
+	}, nil
 }
