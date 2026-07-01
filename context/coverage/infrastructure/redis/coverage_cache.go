@@ -14,7 +14,7 @@ import (
 const (
 	coverageCacheTTL = 5 * time.Minute
 	cacheKeyPrefix   = "coverage:result"
-	planKeyPrefix    = "coverage:plan"
+	//planKeyPrefix    = "coverage:plan"
 )
 
 // RedisClient define los métodos Redis necesarios (misma interfaz que en scheduling).
