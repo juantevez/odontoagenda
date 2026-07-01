@@ -13,10 +13,9 @@ import (
 )
 
 const (
-	slotsCacheTTL   = 5 * time.Minute
-	slotLockTTL     = 30 * time.Second
-	cacheKeyPrefix  = "scheduling:availability"
-	lockKeyPrefix   = "scheduling:slot_lock"
+	slotsCacheTTL  = 5 * time.Minute
+	cacheKeyPrefix = "scheduling:availability"
+	lockKeyPrefix  = "scheduling:slot_lock"
 )
 
 // ── RedisClient — interfaz mínima para testabilidad ───────────────
